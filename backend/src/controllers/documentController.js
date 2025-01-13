@@ -147,16 +147,11 @@ exports.deleteDocument = async (req, res) => {
       return res.status(404).json({ message: 'Organizația nu a fost găsită' });
     }
 
-    // Ștergem documentul original din storage
-    const safeOrgName = organization.name.replace(/[^a-z0-9]/gi, '_').toLowerCase();
-    const storageDir = path.join(__dirname, '../storage');
-    const originalFilePath = path.join(storageDir, safeOrgName, document.fileUrl.split('/').pop());
-    
-    console.log('Deleting original document from:', originalFilePath);
-    if (fs.existsSync(originalFilePath)) {
-      await fs.promises.unlink(originalFilePath);
-      console.log('Original document deleted successfully from storage');
-    }
+    // Ștergem documentul original
+    const fileId = document.fileUrl.split('/').pop();
+    console.log('Deleting original document:', fileId);
+    await storage.deleteFile(fileId, document.organization, organization.name);
+    console.log('Original document deleted successfully');
 
     // Ștergem copiile de la angajați
     console.log('Employee copies to delete:', document.employeeCopies);
@@ -171,7 +166,7 @@ exports.deleteDocument = async (req, res) => {
           console.log('File does not exist at path:', copy.path);
           return;
         }
-        await fs.promises.unlink(copy.path);
+        await deleteEmployeeDocument(copy.path);
         console.log('Successfully deleted employee copy at path:', copy.path);
       } catch (error) {
         console.error('Error deleting employee copy:', error);
@@ -689,10 +684,11 @@ exports.downloadDocumentForSigning = async (req, res) => {
     const { id: documentId, employeeId } = req.params;
     console.log('Downloading document for signing:', { documentId, employeeId });
     
-    // Setăm header-urile CORS pentru a permite accesul de pe orice origin
-    res.setHeader('Access-Control-Allow-Origin', '*');
+    // Setăm header-urile CORS pentru a permite doar originea frontend-ului
+    res.setHeader('Access-Control-Allow-Origin', process.env.FRONTEND_URL || 'http://localhost:3000');
     res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
     
     // Verificăm dacă documentul și angajatul sunt valizi
     const document = await Document.findOne({
@@ -883,19 +879,13 @@ exports.bulkDelete = async (req, res) => {
       return res.status(404).json({ message: 'Organizația nu a fost găsită' });
     }
 
-    const safeOrgName = organization.name.replace(/[^a-z0-9]/gi, '_').toLowerCase();
-    const storageDir = path.join(__dirname, '../storage');
-
     // Ștergem fiecare document și copiile sale
     for (const document of documents) {
-      // Ștergem documentul original din storage
-      const originalFilePath = path.join(storageDir, safeOrgName, document.fileUrl.split('/').pop());
-      console.log('Deleting original document from:', originalFilePath);
-      
-      if (fs.existsSync(originalFilePath)) {
-        await fs.promises.unlink(originalFilePath);
-        console.log('Original document deleted successfully from storage');
-      }
+      // Ștergem documentul original
+      const fileId = document.fileUrl.split('/').pop();
+      console.log('Deleting original document:', fileId);
+      await storage.deleteFile(fileId, document.organization, organization.name);
+      console.log('Original document deleted successfully');
 
       // Ștergem copiile de la angajați
       console.log('Employee copies to delete:', document.employeeCopies);
@@ -910,7 +900,7 @@ exports.bulkDelete = async (req, res) => {
             console.log('File does not exist at path:', copy.path);
             return;
           }
-          await fs.promises.unlink(copy.path);
+          await deleteEmployeeDocument(copy.path);
           console.log('Successfully deleted employee copy at path:', copy.path);
         } catch (error) {
           console.error('Error deleting employee copy:', error);

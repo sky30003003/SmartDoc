@@ -27,6 +27,7 @@ const DocumentViewer = ({ document, open, onClose }) => {
   const [pageNumber, setPageNumber] = useState(1);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [pdfUrl, setPdfUrl] = useState(null);
 
   useEffect(() => {
     if (open) {
@@ -56,13 +57,45 @@ const DocumentViewer = ({ document, open, onClose }) => {
     setPageNumber(prev => Math.min(prev + 1, numPages || 1));
   };
 
+  const loadPdf = async () => {
+    if (!document || !document.employeeCopies?.[0]) return;
+
+    try {
+      setLoading(true);
+      setError(null);
+
+      const response = await fetch(
+        `${process.env.REACT_APP_API_URL}/api/documents/${document._id}/sign/${document.employeeCopies[0].employee}/download`,
+        {
+          headers: {
+            'Authorization': `Bearer ${localStorage.getItem('token')}`
+          },
+          credentials: 'include'
+        }
+      );
+
+      if (!response.ok) {
+        throw new Error('Eroare la încărcarea documentului');
+      }
+
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      setPdfUrl(url);
+    } catch (error) {
+      console.error('Error loading PDF:', error);
+      setError('Eroare la încărcarea documentului: ' + error.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   if (!document || !document.employeeCopies?.[0]) {
     return null;
   }
 
   const employeeCopy = document.employeeCopies[0];
   const token = localStorage.getItem('token');
-  const pdfUrl = `${process.env.REACT_APP_API_URL}/api/documents/${document._id}/sign/${employeeCopy.employee}/download`;
+  const documentUrl = `${process.env.REACT_APP_API_URL}/api/documents/${document._id}/sign/${employeeCopy.employee}/download`;
 
   return (
     <Dialog
@@ -109,7 +142,7 @@ const DocumentViewer = ({ document, open, onClose }) => {
 
           <Document
             file={{
-              url: pdfUrl,
+              url: documentUrl,
               httpHeaders: {
                 'Authorization': `Bearer ${token}`
               },
