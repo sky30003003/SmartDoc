@@ -1,0 +1,56 @@
+<svg width="40" height="40" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- Document background -->
+  <path 
+    d="M10 2C8.89543 2 8 2.89543 8 4V36C8 37.1046 8.89543 38 10 38H30C31.1046 38 32 37.1046 32 36V12L22 2H10Z" 
+    fill="#ffffff"
+  />
+  
+  <!-- Document fold -->
+  <path 
+    d="M22 2L32 12H24C22.8954 12 22 11.1046 22 10V2Z" 
+    fill="#1A73E8" 
+    opacity="0.8"
+  />
+
+  <!-- Digital signature wave -->
+  <path 
+    d="M12 24C12 24 14 20 16 20C18 20 18 28 20 28C22 28 22 20 24 20C26 20 28 24 28 24" 
+    stroke="#1A73E8" 
+    stroke-width="2" 
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  >
+    <animate 
+      attributeName="stroke-dashoffset" 
+      from="100" 
+      to="-100" 
+      dur="2s" 
+      repeatCount="indefinite"
+    />
+  </path>
+
+  <!-- Digital certificate checkmark -->
+  <circle 
+    cx="26" 
+    cy="28" 
+    r="6" 
+    fill="#1A73E8" 
+    opacity="0.2"
+  />
+  <path 
+    d="M23 28L25 30L29 26" 
+    stroke="#1A73E8" 
+    stroke-width="2" 
+    stroke-linecap="round" 
+    stroke-linejoin="round"
+  />
+
+  <!-- Document lines -->
+  <path 
+    d="M12 16H24M12 12H18" 
+    stroke="#1A73E8" 
+    stroke-width="2" 
+    stroke-linecap="round"
+    opacity="0.5"
+  />
+</svg> 
