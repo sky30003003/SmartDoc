@@ -92,7 +92,7 @@ exports.getDashboardStats = async (req, res) => {
     }
 
     console.log('Counting documents for organization:', req.user.organization);
-    const documentsCount = await Document.countDocuments({ organization: req.user.organization });
+    const documentsCount = await Document.countDocuments({ organizationId: req.user.organization });
     console.log('Documents count:', documentsCount);
 
     console.log('Counting employees for organization:', req.user.organization);
@@ -126,13 +126,15 @@ exports.getAllOrganizations = async (req, res) => {
     console.log('Getting all organizations...');
     console.log('User from token:', req.user);
     
-    const organizations = await Organization.find().lean();
+    const organizations = await Organization.find()
+      .select('name email phone cuiCnp')
+      .lean();
     
     // Obținem statisticile pentru fiecare organizație
     const organizationsWithStats = await Promise.all(
       organizations.map(async (org) => {
         const [documentsCount, employeesCount, collaboratorsCount] = await Promise.all([
-          Document.countDocuments({ organization: org._id }),
+          Document.countDocuments({ organizationId: org._id }),
           User.countDocuments({ organization: org._id, role: 'employee' }),
           User.countDocuments({ organization: org._id, role: 'collaborator' })
         ]);
@@ -145,10 +147,6 @@ exports.getAllOrganizations = async (req, res) => {
         };
       })
     );
-    
-    // Verificăm dacă avem acces la baza de date
-    const collections = await mongoose.connection.db.collections();
-    console.log('Available collections:', collections.map(c => c.collectionName));
     
     res.json(organizationsWithStats);
   } catch (error) {

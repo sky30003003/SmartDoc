@@ -7,10 +7,11 @@ const { createEmployeeFolder, copyDocumentToEmployee, deleteEmployeeDocument } =
 const Employee = require('../models/Employee');
 const fs = require('fs');
 const nodemailer = require('nodemailer');
-const DigitalSignatureService = require('../services/cryptography/DigitalSignatureService');
 const { PDFDocument, rgb, StandardFonts } = require('pdf-lib');
 const crypto = require('crypto');
 const QRCode = require('qrcode');
+const fsPromises = require('fs').promises;
+const PAdESService = require('../services/signatures/PAdESService');
 
 const storage = StorageFactory.getStorageService();
 const upload = multer({ storage: multer.memoryStorage() }).single('file');
@@ -53,19 +54,29 @@ const createEmployeeCopies = async (document, organization) => {
 
 exports.getAllDocuments = async (req, res) => {
   try {
-    const documents = await Document.find({ organization: req.user.organization })
-      .select('title description originalName fileType fileUrl fileSize uploadedAt organization employeeCopies signatureConfig')
+    console.log('=== Getting documents for organization ===');
+    console.log('User organization:', req.user.organization);
+
+    const documents = await Document.find({ organizationId: req.user.organization })
+      .select('title description originalName fileType fileUrl fileSize uploadedAt organizationId employeeCopies signatureConfig')
       .sort({ uploadedAt: -1 });
+
+    console.log('Found documents:', documents.length);
+    console.log('Raw documents:', JSON.stringify(documents, null, 2));
 
     // Obținem toți angajații organizației
     const employees = await Employee.find({ organization: req.user.organization })
       .select('_id firstName lastName');
+
+    console.log('Found employees:', employees.length);
 
     // Creăm un map pentru căutare rapidă
     const employeeMap = employees.reduce((map, emp) => {
       map[emp._id.toString()] = `${emp.firstName} ${emp.lastName}`;
       return map;
     }, {});
+
+    console.log('Employee map:', employeeMap);
 
     // Adăugăm numele angajaților în documentele returnate
     const enrichedDocuments = documents.map(doc => {
@@ -78,6 +89,9 @@ exports.getAllDocuments = async (req, res) => {
       }
       return docObj;
     });
+
+    console.log('Enriched documents:', JSON.stringify(enrichedDocuments, null, 2));
+    console.log('=== End of getting documents ===');
 
     res.json(enrichedDocuments);
   } catch (error) {
@@ -107,7 +121,7 @@ exports.uploadDocument = async (req, res) => {
     try {
       // Verificăm dacă există deja un document cu același titlu în organizație
       const existingDocTitle = await Document.findOne({
-        organization: req.user.organization,
+        organizationId: req.user.organization,
         title: title
       });
 
@@ -119,7 +133,7 @@ exports.uploadDocument = async (req, res) => {
 
       // Verificăm dacă există deja un document cu același nume original în organizație
       const existingDocName = await Document.findOne({
-        organization: req.user.organization,
+        organizationId: req.user.organization,
         originalName: file.originalname
       });
 
@@ -147,20 +161,35 @@ exports.uploadDocument = async (req, res) => {
         }
       }
 
+      // Inițializăm progresul semnăturilor
+      const signatureProgress = {
+        currentStep: 0,
+        totalSteps: parsedSignatureConfig.length,
+        completedSignatures: []
+      };
+
       const document = new Document({
         title,
         description,
         originalName: file.originalname,
-        fileUrl: uploadResult.url,
-        fileType: file.mimetype,
-        fileSize: file.size,
-        organization: req.user.organization,
+        path: uploadResult.path,
+        organizationId: req.user.organization,
         uploadedBy: req.user.userId,
         signatureConfig: parsedSignatureConfig,
+        signatureProgress,
         employeeCopies: [] // Inițializăm array-ul gol pentru copii
       });
 
       await document.save();
+
+      // Dacă există configurație de semnături, trimitem notificări către primii semnatari
+      if (parsedSignatureConfig.length > 0) {
+        const firstSigners = parsedSignatureConfig.filter(config => config.order === 1);
+        if (firstSigners.length > 0) {
+          await notifyNextSigner(document);
+        }
+      }
+
       res.status(201).json(document);
     } catch (error) {
       console.error('Error uploading document:', error);
@@ -186,7 +215,7 @@ exports.deleteDocument = async (req, res) => {
   try {
     const document = await Document.findOne({
       _id: req.params.id,
-      organization: req.user.organization
+      organizationId: req.user.organization
     }).populate('employeeCopies.employee');
 
     if (!document) {
@@ -238,7 +267,7 @@ exports.downloadDocument = async (req, res) => {
   try {
     const document = await Document.findOne({
       _id: req.params.id,
-      organization: req.user.organization
+      organizationId: req.user.organization
     });
 
     if (!document) {
@@ -272,7 +301,7 @@ exports.sendToSign = async (req, res) => {
     // Găsim documentul și verificăm dacă aparține organizației
     const document = await Document.findOne({
       _id: req.params.id,
-      organization: req.user.organization
+      organizationId: req.user.organization
     });
 
     if (!document) {
@@ -440,285 +469,138 @@ exports.getSigningDetails = async (req, res) => {
 
 exports.signDocument = async (req, res) => {
   try {
-    console.log('Starting document signing process:', {
-      documentId: req.params.id,
-      employeeId: req.params.employeeId
-    });
+    const { id, employeeId } = req.params;
 
-    // Găsim documentul și verificăm dacă aparține organizației
-    const document = await Document.findOne({
-      _id: req.params.id,
-      'employeeCopies.employee': req.params.employeeId
-    }).populate('organization');
-
+    // Găsim documentul și verificăm dacă există
+    const document = await Document.findById(id);
     if (!document) {
-      console.log('Document not found');
       return res.status(404).json({ message: 'Documentul nu a fost găsit' });
     }
 
-    console.log('Document found:', {
-      id: document._id,
-      title: document.title,
-      signatureSettings: document.organization.signatureSettings
-    });
-
-    // Verificăm dacă angajatul are dreptul să semneze
-    const employeeCopy = document.employeeCopies.find(
-      copy => copy.employee.toString() === req.params.employeeId
-    );
-
-    if (!employeeCopy) {
-      console.log('Employee copy not found');
-      return res.status(403).json({ message: 'Nu aveți dreptul să semnați acest document' });
+    // Verificăm dacă angajatul poate semna documentul
+    const canSignNow = await document.canSign(employeeId);
+    if (!canSignNow) {
+      return res.status(400).json({ 
+        message: 'Nu puteți semna acest document încă. Așteptați semnăturile anterioare.' 
+      });
     }
 
-    console.log('Employee copy found:', {
-      status: employeeCopy.status,
-      path: employeeCopy.path
-    });
-
-    if (employeeCopy.status === 'signed') {
-      console.log('Document already signed');
-      return res.status(400).json({ message: 'Documentul a fost deja semnat' });
-    }
-
-    // Găsim angajatul
-    const employee = await Employee.findById(req.params.employeeId);
+    // Găsim angajatul și verificăm dacă există
+    const employee = await Employee.findById(employeeId);
     if (!employee) {
-      console.log('Employee not found');
       return res.status(404).json({ message: 'Angajatul nu a fost găsit' });
     }
 
-    console.log('Employee found:', {
-      id: employee._id,
-      name: `${employee.firstName} ${employee.lastName}`
-    });
-
-    // Găsim organizația
-    const organization = document.organization;
+    // Găsim organizația și verificăm dacă există
+    const organization = await Organization.findById(document.organizationId);
     if (!organization) {
-      console.log('Organization not found');
       return res.status(404).json({ message: 'Organizația nu a fost găsită' });
     }
 
-    console.log('Organization signature settings:', {
-      printSignature: organization.signatureSettings?.printSignature,
-      includeQRCode: organization.signatureSettings?.includeQRCode
-    });
+    // Găsim copia documentului pentru angajat
+    const employeeCopy = document.employeeCopies.find(
+      copy => copy.employee.toString() === employeeId
+    );
 
-    // Încărcăm PDF-ul original
-    console.log('Loading PDF from path:', employeeCopy.path);
-    const pdfBytes = await fs.promises.readFile(employeeCopy.path);
-    console.log('PDF loaded successfully');
+    if (!employeeCopy) {
+      return res.status(404).json({ message: 'Copia documentului nu a fost găsită' });
+    }
 
-    // Generăm ID-ul semnăturii înainte de a-l folosi în QR code
-    const signatureId = crypto.randomBytes(8).toString('hex');
-    console.log('Generated signature ID:', signatureId);
+    if (employeeCopy.status === 'signed') {
+      return res.status(400).json({ message: 'Documentul a fost deja semnat' });
+    }
 
-    // Încărcăm PDF-ul și pregătim pentru semnare
-    const pdfDoc = await PDFDocument.load(pdfBytes);
-    console.log('PDF document loaded into PDFDocument');
-    
-    const pages = pdfDoc.getPages();
-    const lastPage = pages[pages.length - 1];
-    const { width, height } = lastPage.getSize();
+    // Generăm un ID unic pentru semnătură
+    const signatureId = `sig-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
 
-    // Adăugăm watermark doar dacă printSignature este activat
-    if (organization.signatureSettings?.printSignature) {
-      console.log('Adding watermark - printSignature is enabled');
-      
-      try {
-        // Folosim Helvetica în loc de TimesRoman pentru suport Unicode
-        const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
-        console.log('Font embedded successfully');
+    try {
+      // Inițializăm serviciul PAdES cu setările organizației
+      await PAdESService.initialize({
+        basePath: path.join(__dirname, '../secure_storage'),
+        validityYears: organization.certificateSettings?.validityYears || 5,
+        visualSignature: organization.signatureSettings?.printSignature || false,
+        includeQR: organization.signatureSettings?.includeQRCode || false
+      });
 
-        // Pregătim textul pentru watermark folosind diacritice ASCII
-        const watermarkText = [
-          'Semnat digital de:',
-          `${employee.firstName} ${employee.lastName}`,
-          `CNP: ${employee.cnp}`,
-          `Data: ${new Date().toLocaleDateString('en-US')}`,
-          `ID Semnatura: ${signatureId}`
-        ];
+      // Citim documentul PDF
+      const pdfBuffer = await fsPromises.readFile(employeeCopy.path);
 
-        // Calculăm dimensiunile pentru watermark și QR code
-        const margin = 50;
-        const fontSize = 10;
-        const lineHeight = fontSize * 1.2;
-        const textWidth = Math.max(...watermarkText.map(line => font.widthOfTextAtSize(line, fontSize)));
-        const textHeight = lineHeight * watermarkText.length;
-        const qrCodeSize = 100;
-        
-        // Calculăm poziția pentru watermark și QR code
-        let x = width - textWidth - margin;
-        let y = margin;
-
-        // Dacă includem QR code, ajustăm poziția watermark-ului
-        if (organization.signatureSettings?.includeQRCode) {
-          console.log('QR code is enabled - adjusting watermark position');
-          y = margin + qrCodeSize + 30; // Adăugăm spațiu pentru QR code și text
+      // Semnăm documentul
+      const { document: signedPdfBuffer, signature } = await PAdESService.signDocument(
+        pdfBuffer,
+        {
+          id: employee._id,
+          firstName: employee.firstName,
+          lastName: employee.lastName,
+          email: employee.email,
+          organization: organization.name
+        },
+        {
+          title: document.title,
+          signatureId
         }
+      );
 
-        // Desenăm watermark-ul
-        watermarkText.forEach((line, index) => {
-          lastPage.drawText(line, {
-            x: x,
-            y: y + (watermarkText.length - 1 - index) * lineHeight,
-            size: fontSize,
-            font: font,
-            color: rgb(0, 0, 0),
-            opacity: 0.8
-          });
-        });
+      // Salvăm documentul semnat
+      await fsPromises.writeFile(employeeCopy.path, signedPdfBuffer);
 
-        // Adăugăm QR code doar dacă este activat în setări
-        if (organization.signatureSettings?.includeQRCode) {
-          console.log('Adding QR code to document - includeQRCode is enabled');
-          
-          // Generăm QR code-ul folosind FRONTEND_URL din env
-          const verificationUrl = `${process.env.FRONTEND_URL}/verify/${document._id}/${signatureId}`;
-          console.log('QR code verification URL:', verificationUrl);
-          
-          const qrCodeDataUrl = await QRCode.toDataURL(verificationUrl, {
-            errorCorrectionLevel: 'H',
-            margin: 2,
-            width: 300
-          });
-          const qrImageBytes = qrCodeDataUrl.split(',')[1];
-          const qrImage = await pdfDoc.embedPng(Buffer.from(qrImageBytes, 'base64'));
+      // Actualizăm documentul cu informațiile semnăturii
+      const signatureConfig = document.signatureConfig.find(
+        config => config.role === employee.role
+      );
 
-          // Desenăm QR code-ul cu dimensiuni mai mari pentru scanare mai ușoară
-          const qrCodeX = width - qrCodeSize - margin;
-          const qrCodeY = margin;
+      // Adăugăm semnătura la progres
+      document.signatureProgress.completedSignatures.push({
+        role: employee.role,
+        signedAt: new Date(),
+        signedBy: employee._id,
+        order: signatureConfig.order
+      });
 
-          lastPage.drawImage(qrImage, {
-            x: qrCodeX,
-            y: qrCodeY,
-            width: qrCodeSize,
-            height: qrCodeSize
-          });
+      // Actualizăm progresul semnăturilor
+      document.signatureProgress.currentStep++;
 
-          // Adăugăm textul sub QR code folosind Helvetica
-          const verifyText = 'Scaneaza pentru verificare';
-          const verifyTextWidth = font.widthOfTextAtSize(verifyText, fontSize);
-          lastPage.drawText(verifyText, {
-            x: qrCodeX + (qrCodeSize - verifyTextWidth) / 2,
-            y: qrCodeY - 15,
-            size: fontSize,
-            font: font,
-            color: rgb(0, 0, 0),
-            opacity: 0.8
-          });
-        } else {
-          console.log('QR code is disabled - skipping QR code generation');
-        }
-
-        // Salvăm documentul modificat
-        console.log('Saving modified PDF');
-        const modifiedPdfBytes = await pdfDoc.save();
-        await fs.promises.writeFile(employeeCopy.path, modifiedPdfBytes);
-        console.log('Modified PDF saved successfully');
-
-        // Verificăm dacă angajatul are deja o pereche de chei
-        if (!employee.digitalSignature?.publicKey) {
-          console.log('Generating new key pair for employee');
-          const keypair = DigitalSignatureService.generateKeyPair();
-          const certificate = DigitalSignatureService.generateCertificate(keypair, {
-            firstName: employee.firstName,
-            lastName: employee.lastName,
-            organization: organization.name
-          });
-
-          // Salvăm cheia publică și certificatul în baza de date
-          employee.digitalSignature = {
-            publicKey: keypair.publicKey,
-            certificate: certificate,
-            createdAt: new Date()
-          };
-          await employee.save();
-
-          // Salvăm cheia privată într-un fișier securizat
-          const privateKeyPath = path.join(
-            __dirname,
-            '../secure_storage',
-            `${employee._id}_private_key.pem`
-          );
-          await fs.promises.mkdir(path.dirname(privateKeyPath), { recursive: true });
-          await fs.promises.writeFile(privateKeyPath, keypair.privateKey, 'utf8');
-        }
-
-        // Calculăm hash-ul documentului modificat
-        console.log('Calculating document hash');
-        const documentHash = DigitalSignatureService.calculateDocumentHash(modifiedPdfBytes);
-        console.log('Document hash calculated');
-
-        // Citim cheia privată
-        const privateKeyPath = path.join(
-          __dirname,
-          '../secure_storage',
-          `${employee._id}_private_key.pem`
-        );
-        console.log('Reading private key from:', privateKeyPath);
-        const privateKey = await fs.promises.readFile(privateKeyPath, 'utf8');
-        console.log('Private key read successfully');
-
-        // Semnăm documentul
-        console.log('Signing document');
-        const signature = DigitalSignatureService.signDocument(documentHash, privateKey);
-        console.log('Document signed successfully');
-
-        // Actualizăm documentul cu informațiile semnăturii
-        const result = await Document.findOneAndUpdate(
-          { 
-            _id: document._id,
-            'employeeCopies.employee': req.params.employeeId 
-          },
-          { 
-            $set: { 
-              'employeeCopies.$.status': 'signed',
-              'employeeCopies.$.signedAt': new Date(),
-              'employeeCopies.$.documentHash': documentHash,
-              'employeeCopies.$.digitalSignature': signature,
-              'employeeCopies.$.publicKey': employee.digitalSignature.publicKey,
-              'employeeCopies.$.signatureTimestamp': new Date(),
-              'employeeCopies.$.signatureId': signatureId
-            }
-          },
-          { new: true }
-        );
-
-        if (!result) {
-          throw new Error('Nu s-a putut actualiza statusul documentului');
-        }
-
-        // Verificăm semnătura pentru a ne asigura că totul este în regulă
-        const isValid = DigitalSignatureService.verifySignature(
-          documentHash,
-          signature,
-          employee.digitalSignature.publicKey
-        );
-
-        if (!isValid) {
-          throw new Error('Verificarea semnăturii a eșuat');
-        }
-
-        res.json({ 
-          message: 'Document semnat cu succes',
-          status: 'signed',
-          signedAt: new Date(),
-          signatureInfo: {
-            documentHash,
-            timestamp: new Date(),
-            signedBy: `${employee.firstName} ${employee.lastName}`,
-            signatureId
+      // Actualizăm copia angajatului
+      const result = await Document.findOneAndUpdate(
+        { 
+          _id: document._id,
+          'employeeCopies.employee': employeeId 
+        },
+        { 
+          $set: { 
+            'employeeCopies.$.status': 'signed',
+            'employeeCopies.$.signedAt': signature.info.signedAt,
+            'employeeCopies.$.documentHash': signature.info.documentHash,
+            'employeeCopies.$.signatureId': signature.info.signatureId,
+            'employeeCopies.$.signatureMetadata': signature.metadata,
+            signatureProgress: document.signatureProgress
           }
-        });
-      } catch (error) {
-        console.error('Error in PDF processing:', error);
-        throw error;
+        },
+        { new: true }
+      );
+
+      if (!result) {
+        throw new Error('Nu s-a putut actualiza statusul documentului');
       }
-    } else {
-      console.log('Skipping watermark - printSignature is disabled');
+
+      // Notificăm următorul semnatar dacă există
+      await notifyNextSigner(document);
+
+      res.json({ 
+        message: 'Document semnat cu succes',
+        status: 'signed',
+        signedAt: signature.info.signedAt,
+        signatureInfo: {
+          documentHash: signature.info.documentHash,
+          timestamp: signature.metadata.timestamps[0],
+          signedBy: signature.info.getSignerDisplayInfo(),
+          signatureId: signature.info.signatureId
+        }
+      });
+
+    } catch (error) {
+      console.error('Error in PDF processing:', error);
+      throw error;
     }
 
   } catch (error) {
@@ -727,6 +609,74 @@ exports.signDocument = async (req, res) => {
       message: 'Eroare la semnarea documentului',
       error: error.message 
     });
+  }
+};
+
+// Funcție pentru notificarea următorului semnatar
+const notifyNextSigner = async (document) => {
+  try {
+    // Găsim următoarea configurație de semnătură
+    const nextSignatureConfig = document.signatureConfig.find(config => 
+      !document.signatureProgress.completedSignatures.some(
+        sig => sig.role === config.role
+      )
+    );
+
+    if (!nextSignatureConfig) {
+      console.log('Toate semnăturile au fost completate');
+      return;
+    }
+
+    // Configurăm transportul de email
+    const transporter = nodemailer.createTransport({
+      service: 'gmail',
+      host: 'smtp.gmail.com',
+      port: 587,
+      secure: false,
+      auth: {
+        user: process.env.SMTP_USER,
+        pass: process.env.SMTP_PASS
+      },
+      tls: {
+        rejectUnauthorized: false
+      }
+    });
+
+    // Găsim angajații cu rolul următor
+    const nextSigners = await Employee.find({ 
+      organization: document.organizationId,
+      role: nextSignatureConfig.role 
+    });
+
+    // Trimitem notificări către toți angajații care trebuie să semneze
+    const emailPromises = nextSigners.map(async (signer) => {
+      const signLink = `${process.env.FRONTEND_URL}/sign-document/${document._id}/${signer._id}`;
+
+      return transporter.sendMail({
+        from: process.env.SMTP_FROM || '"SmartDoc" <noreply@smartdoc.com>',
+        to: signer.email,
+        subject: `Document de semnat: ${document.title}`,
+        html: `
+          <h2>Este rândul dumneavoastră să semnați</h2>
+          <p>Documentul "${document.title}" necesită semnătura dumneavoastră.</p>
+          <p>Semnăturile anterioare au fost completate și acum este rândul dumneavoastră.</p>
+          <p>Pentru a semna documentul, accesați următorul link:</p>
+          <a href="${signLink}" style="display:inline-block;padding:12px 24px;background-color:#1976d2;color:white;text-decoration:none;border-radius:4px;">
+            Semnează documentul
+          </a>
+          <p style="margin-top:24px;color:#666;">
+            Acest link este unic și poate fi folosit doar pentru semnarea documentului dumneavoastră.
+          </p>
+        `
+      });
+    });
+
+    await Promise.all(emailPromises);
+    console.log(`Notificări trimise către ${nextSigners.length} angajați cu rolul ${nextSignatureConfig.role}`);
+
+  } catch (error) {
+    console.error('Error notifying next signers:', error);
+    throw error;
   }
 };
 
@@ -800,7 +750,7 @@ exports.verifySignature = async (req, res) => {
     }
 
     // Găsește copia semnată folosind signatureId
-    const signedCopy = document.employeeCopies.find(copy => copy._id.toString() === signatureId);
+    const signedCopy = document.employeeCopies.find(copy => copy.signatureId === signatureId);
     if (!signedCopy) {
       return res.status(404).json({ message: 'Semnătura nu a fost găsită' });
     }
@@ -810,21 +760,32 @@ exports.verifySignature = async (req, res) => {
       return res.status(400).json({ message: 'Documentul nu este semnat' });
     }
 
-    // Verifică semnătura digitală folosind DigitalSignatureService
-    const isValid = DigitalSignatureService.verifySignature(
-      signedCopy.documentHash,
-      signedCopy.digitalSignature,
-      signedCopy.publicKey
+    // Inițializăm serviciul PAdES
+    await PAdESService.initialize({
+      basePath: path.join(__dirname, '../secure_storage')
+    });
+
+    // Citim documentul PDF
+    const pdfBuffer = await fsPromises.readFile(signedCopy.path);
+
+    // Verificăm semnăturile
+    const verificationResults = await PAdESService.verifyDocument(pdfBuffer);
+
+    // Găsim rezultatul pentru semnătura specificată
+    const signatureResult = verificationResults.find(
+      result => result.signatureId === signatureId
     );
 
-    // Găsește angajatul pentru a include numele în răspuns
-    const employee = await Employee.findById(signedCopy.employee);
-    
+    if (!signatureResult) {
+      return res.status(404).json({ message: 'Semnătura nu a fost găsită în document' });
+    }
+
     return res.json({
-      isValid,
-      signedBy: employee ? `${employee.firstName} ${employee.lastName}` : 'Unknown',
+      isValid: signatureResult.isValid,
+      signedBy: signatureResult.signerInfo.name,
       signedAt: signedCopy.signedAt,
-      documentHash: signedCopy.documentHash
+      documentHash: signatureResult.documentHash,
+      errors: signatureResult.errors
     });
 
   } catch (error) {
@@ -844,7 +805,7 @@ exports.bulkDelete = async (req, res) => {
     // Găsim toate documentele care aparțin organizației
     const documents = await Document.find({
       _id: { $in: documentIds },
-      organization: req.user.organization
+      organizationId: req.user.organization
     }).populate('employeeCopies.employee');
 
     if (documents.length === 0) {

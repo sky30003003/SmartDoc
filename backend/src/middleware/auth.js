@@ -2,16 +2,23 @@ const jwt = require('jsonwebtoken');
 
 const authenticateToken = (req, res, next) => {
   try {
-    console.log('Auth headers:', req.headers);
+    console.log('\n=== Authentication Middleware ===');
+    console.log('Headers:', req.headers);
+    console.log('Method:', req.method);
+    console.log('Path:', req.path);
+    
     const authHeader = req.headers['authorization'];
+    console.log('Authorization header:', authHeader);
+    
     const token = authHeader && authHeader.split(' ')[1];
+    console.log('Extracted token:', token);
 
     if (!token) {
       console.log('No token provided');
       return res.status(401).json({ message: 'Token lipsă' });
     }
 
-    console.log('Verifying token:', token);
+    console.log('JWT Secret:', process.env.JWT_SECRET ? 'Present' : 'Missing');
     jwt.verify(token, process.env.JWT_SECRET, (err, user) => {
       if (err) {
         console.log('Token verification error:', err);

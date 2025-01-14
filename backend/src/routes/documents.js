@@ -11,12 +11,6 @@ const upload = multer({
   }
 });
 
-// Adaugă această rută de test la început
-router.get('/test', (req, res) => {
-  console.log('Ruta de test pentru documente accesată');
-  res.json({ message: 'Ruta de documente funcționează' });
-});
-
 // Adaugă document nou pentru organizație
 router.post('/', upload.single('file'), async (req, res) => {
   console.log('POST /documents - Start');

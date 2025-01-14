@@ -3,6 +3,22 @@ const crypto = require('crypto');
 
 class DigitalSignatureService {
   /**
+   * Calculează datele de valabilitate pentru un certificat
+   * @param {Object} orgSettings - Setările organizației pentru perioada de valabilitate
+   * @returns {Object} Obiect cu datele notBefore și notAfter
+   */
+  static _calculateValidity(orgSettings = null) {
+    const notBefore = new Date();
+    const notAfter = new Date();
+
+    // Folosim setările organizației dacă există, altfel valoarea implicită de 5 ani
+    const validityYears = orgSettings?.certificateSettings?.validityYears || 5;
+    notAfter.setFullYear(notBefore.getFullYear() + validityYears);
+
+    return { notBefore, notAfter };
+  }
+
+  /**
    * Generează o pereche de chei RSA pentru un angajat
    * @returns {Object} Obiect conținând cheile publică și privată în format PEM
    */
@@ -67,15 +83,20 @@ class DigitalSignatureService {
    * Generează un certificat pentru cheia publică
    * @param {Object} keypair - Perechea de chei
    * @param {Object} employeeInfo - Informații despre angajat
+   * @param {Object} orgSettings - Setările organizației
    * @returns {string} Certificatul în format PEM
    */
-  static generateCertificate(keypair, employeeInfo) {
+  static generateCertificate(keypair, employeeInfo, orgSettings = null) {
     const cert = forge.pki.createCertificate();
     cert.publicKey = forge.pki.publicKeyFromPem(keypair.publicKey);
     cert.serialNumber = '01';
-    cert.validity.notBefore = new Date();
-    cert.validity.notAfter = new Date();
-    cert.validity.notAfter.setFullYear(cert.validity.notBefore.getFullYear() + 1);
+
+    // Setăm perioada de valabilitate folosind setările organizației
+    const validity = this._calculateValidity(orgSettings);
+    cert.validity.notBefore = validity.notBefore;
+    cert.validity.notAfter = validity.notAfter;
+
+    const validityYears = orgSettings?.certificateSettings?.validityYears || 5;
 
     const attrs = [{
       name: 'commonName',
@@ -86,15 +107,46 @@ class DigitalSignatureService {
     }, {
       shortName: 'OU',
       value: employeeInfo.organization
+    }, {
+      name: 'validityPeriod',
+      value: `${validityYears} years`
     }];
 
     cert.setSubject(attrs);
     cert.setIssuer(attrs);
     
-    // Auto-semnare (pentru semnătură avansată, nu calificată)
     cert.sign(forge.pki.privateKeyFromPem(keypair.privateKey));
     
     return forge.pki.certificateToPem(cert);
+  }
+
+  /**
+   * Verifică valabilitatea unui certificat
+   * @param {string} certificatePem - Certificatul în format PEM
+   * @returns {Object} Obiect cu informații despre valabilitate
+   */
+  static verifyCertificateValidity(certificatePem) {
+    try {
+      const cert = forge.pki.certificateFromPem(certificatePem);
+      const now = new Date();
+
+      const validityPeriod = cert.subject.getField('validityPeriod')?.value;
+
+      return {
+        isValid: now >= cert.validity.notBefore && now <= cert.validity.notAfter,
+        notBefore: cert.validity.notBefore,
+        notAfter: cert.validity.notAfter,
+        validityPeriod: validityPeriod,
+        daysUntilExpiration: Math.ceil((cert.validity.notAfter - now) / (1000 * 60 * 60 * 24)),
+        yearsUntilExpiration: Math.ceil((cert.validity.notAfter - now) / (1000 * 60 * 60 * 24 * 365))
+      };
+    } catch (error) {
+      console.error('Error verifying certificate validity:', error);
+      return {
+        isValid: false,
+        error: error.message
+      };
+    }
   }
 }
 

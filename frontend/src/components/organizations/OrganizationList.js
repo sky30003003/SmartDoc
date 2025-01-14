@@ -22,13 +22,17 @@ import {
   Button,
   Checkbox,
   Stack,
-  Link
+  Link,
+  List,
+  ListItem,
+  ListItemText
 } from '@mui/material';
 import {
   Edit as EditIcon,
   Delete as DeleteIcon,
   Visibility as ViewIcon,
-  Add as AddIcon
+  Add as AddIcon,
+  Info as InfoIcon
 } from '@mui/icons-material';
 import { useNavigate } from 'react-router-dom';
 import AdminPageHeader from '../common/AdminPageHeader';
@@ -49,16 +53,15 @@ const OrganizationList = () => {
   const [deletedOrgName, setDeletedOrgName] = useState('');
   const [bulkDeleteSuccessDialog, setBulkDeleteSuccessDialog] = useState(false);
   const [deletedOrgsCount, setDeletedOrgsCount] = useState(0);
+  const [detailsDialog, setDetailsDialog] = useState({
+    open: false,
+    organization: null
+  });
 
   useEffect(() => {
     const fetchOrganizations = async () => {
       try {
         const token = localStorage.getItem('token');
-        console.log('Fetching organizations with token:', token);
-        
-        // Test route first
-        const testResponse = await fetch(`${process.env.REACT_APP_API_URL}/api/organizations/test`);
-        console.log('Test route response:', await testResponse.text());
         
         const response = await fetch(`${process.env.REACT_APP_API_URL}/api/organizations`, {
           headers: {
@@ -322,8 +325,14 @@ const OrganizationList = () => {
                   <TableCell align="center">{org.collaboratorsCount || 0}</TableCell>
                   <TableCell align="right">
                     <Tooltip title="Vezi detalii">
-                      <IconButton size="small" onClick={() => navigate(`/organizations/${org._id}`)}>
-                        <ViewIcon />
+                      <IconButton
+                        color="primary"
+                        onClick={() => setDetailsDialog({
+                          open: true,
+                          organization: org
+                        })}
+                      >
+                        <InfoIcon />
                       </IconButton>
                     </Tooltip>
                     <Tooltip title="Editează">
@@ -450,6 +459,48 @@ const OrganizationList = () => {
             variant="contained"
           >
             OK
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog
+        open={detailsDialog.open}
+        onClose={() => setDetailsDialog({ open: false, organization: null })}
+        maxWidth="sm"
+        fullWidth
+      >
+        <DialogTitle>Detalii Organizație</DialogTitle>
+        <DialogContent>
+          <List>
+            <ListItem>
+              <ListItemText
+                primary="Nume"
+                secondary={detailsDialog.organization?.name}
+              />
+            </ListItem>
+            <ListItem>
+              <ListItemText
+                primary="Email"
+                secondary={detailsDialog.organization?.email}
+              />
+            </ListItem>
+            <ListItem>
+              <ListItemText
+                primary="Telefon"
+                secondary={detailsDialog.organization?.phone}
+              />
+            </ListItem>
+            <ListItem>
+              <ListItemText
+                primary="CUI/CNP"
+                secondary={detailsDialog.organization?.cuiCnp}
+              />
+            </ListItem>
+          </List>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setDetailsDialog({ open: false, organization: null })}>
+            Închide
           </Button>
         </DialogActions>
       </Dialog>

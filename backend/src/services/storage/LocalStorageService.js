@@ -1,78 +1,53 @@
-const StorageInterface = require('./StorageInterface');
+const fs = require('fs').promises;
 const path = require('path');
-const fs = require('fs');
-const fsPromises = require('fs').promises;
 
-class LocalStorageService extends StorageInterface {
+class LocalStorageService {
   constructor() {
-    super();
-    this.storageDir = path.join(__dirname, '../../storage');
-    //this.ensureStorageExists();
-  }
-
-  /*async ensureStorageExists() {
-    try {
-      await fsPromises.access(this.storageDir);
-    } catch {
-      await fsPromises.mkdir(this.storageDir, { recursive: true });
-    }
-    console.log('Storage directory created:', this.storageDir);
-  }*/
-
-  sanitizeFileName(fileName) {
-    // Separăm numele de extensie
-    const ext = path.extname(fileName);
-    const baseName = path.basename(fileName, ext);
-    
-    // Sanitizăm doar numele, păstrăm extensia intactă
-    const safeName = baseName
-      .replace(/[^a-z0-9]/gi, '_')
-      .toLowerCase();
-    
-    // Reunim numele sanitizat cu extensia originală
-    return safeName + ext;
+    this.baseDir = path.join(__dirname, '../../storage');
   }
 
   async uploadFile(file, organizationId, organizationName) {
     try {
-      const safeOrgName = organizationName.toLowerCase().replace(/[^a-z0-9]/gi, '_');
-      const storageDir = path.join(process.cwd(), 'src', 'storage', safeOrgName);
+      // Creăm un nume sigur pentru organizație (fără caractere speciale)
+      const safeOrgName = organizationName.replace(/[^a-z0-9]/gi, '_').toLowerCase();
       
-      if (!fs.existsSync(storageDir)) {
-        await fsPromises.mkdir(storageDir, { recursive: true });
-      }
+      // Creăm directorul organizației dacă nu există
+      const orgDir = path.join(this.baseDir, safeOrgName);
+      await fs.mkdir(orgDir, { recursive: true });
 
-      const fileName = file.originalname;
-      const filePath = path.join(storageDir, fileName);
+      // Generăm un nume unic pentru fișier
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+      const fileName = `${path.parse(file.originalname).name}_${timestamp}.pdf`;
+      
+      // Calea completă unde va fi salvat fișierul
+      const filePath = path.join(orgDir, fileName);
+      
+      // Salvăm fișierul
+      await fs.writeFile(filePath, file.buffer);
 
-      await fsPromises.writeFile(filePath, file.buffer);
-
+      // Returnăm calea relativă față de directorul de stocare
       return {
-        fileId: fileName,
-        url: `/storage/${safeOrgName}/${fileName}`,
-        path: filePath
+        path: filePath,
+        url: `/storage/${safeOrgName}/${fileName}`
       };
     } catch (error) {
-      console.error('Error in LocalStorageService:', error);
-      throw error;
+      console.error('Error in LocalStorageService.uploadFile:', error);
+      throw new Error('Nu s-a putut salva fișierul: ' + error.message);
     }
   }
 
-  async deleteFile(fileId, organizationId, organizationName) {
-    const safeOrgName = this.sanitizeFileName(organizationName);
-    const filePath = path.join(this.storageDir, safeOrgName, fileId);
+  async deleteFile(fileName, organizationId, organizationName) {
     try {
-      await fsPromises.unlink(filePath);
+      const safeOrgName = organizationName.replace(/[^a-z0-9]/gi, '_').toLowerCase();
+      const filePath = path.join(this.baseDir, safeOrgName, fileName);
+      
+      await fs.unlink(filePath);
+      return true;
     } catch (error) {
-      console.error('Error deleting file:', error);
-      throw new Error('Eroare la ștergerea fișierului');
+      console.error('Error in LocalStorageService.deleteFile:', error);
+      throw new Error('Nu s-a putut șterge fișierul: ' + error.message);
     }
-  }
-
-  async getFileUrl(fileId, organizationId, organizationName) {
-    const safeOrgName = this.sanitizeFileName(organizationName);
-    return `/storage/${safeOrgName}/${fileId}`;
   }
 }
 
-module.exports = new LocalStorageService(); 
+module.exports = LocalStorageService; 

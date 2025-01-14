@@ -3,41 +3,25 @@ const nodemailer = require('nodemailer');
 let transporter;
 
 const initializeTransporter = async () => {
-  if (process.env.NODE_ENV === 'production') {
-    // Configurare Gmail SMTP
-    transporter = nodemailer.createTransport({
-      host: process.env.SMTP_HOST,
-      port: process.env.SMTP_PORT,
-      secure: false, // true pentru 465, false pentru alte porturi
-      auth: {
-        user: process.env.SMTP_USER,
-        pass: process.env.SMTP_PASS
-      },
-      tls: {
-        rejectUnauthorized: false // necesar pentru unele configurații
-      }
-    });
-
-    // Verifică conexiunea
-    try {
-      await transporter.verify();
-      console.log('Server SMTP conectat cu succes');
-    } catch (error) {
-      console.error('Eroare la conectarea la SMTP:', error);
-      throw error;
+  transporter = nodemailer.createTransport({
+    host: process.env.SMTP_HOST,
+    port: process.env.SMTP_PORT,
+    secure: false,
+    auth: {
+      user: process.env.SMTP_USER,
+      pass: process.env.SMTP_PASS
+    },
+    tls: {
+      rejectUnauthorized: false
     }
-  } else {
-    // Păstrăm Ethereal pentru development
-    const testAccount = await nodemailer.createTestAccount();
-    transporter = nodemailer.createTransport({
-      host: 'smtp.ethereal.email',
-      port: 587,
-      secure: false,
-      auth: {
-        user: testAccount.user,
-        pass: testAccount.pass
-      }
-    });
+  });
+
+  try {
+    await transporter.verify();
+    console.log('Server SMTP conectat cu succes');
+  } catch (error) {
+    console.error('Eroare la conectarea la SMTP:', error);
+    throw error;
   }
 };
 

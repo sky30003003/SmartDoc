@@ -5,17 +5,26 @@ import {
   FormControlLabel,
   Switch,
   CircularProgress,
-  Paper
+  Paper,
+  TextField,
+  Divider,
+  Tooltip,
+  IconButton
 } from '@mui/material';
+import InfoIcon from '@mui/icons-material/Info';
 import { useAuth } from '../../context/AuthContext';
 
 const SignatureSettings = () => {
   const { currentUser } = useAuth();
   const [settings, setSettings] = useState({
     printSignature: true,
-    includeQRCode: true
+    includeQRCode: true,
+    certificateSettings: {
+      validityYears: 5
+    }
   });
   const [loading, setLoading] = useState(true);
+  const [validityError, setValidityError] = useState('');
 
   useEffect(() => {
     fetchSettings();
@@ -81,6 +90,33 @@ const SignatureSettings = () => {
     }
   };
 
+  const handleValidityChange = (event) => {
+    const value = parseInt(event.target.value);
+    
+    if (isNaN(value)) {
+      setValidityError('Introduceți un număr valid');
+      return;
+    }
+
+    if (value < 1) {
+      setValidityError('Perioada minimă este de 1 an');
+      return;
+    }
+
+    if (value > 1000) {
+      setValidityError('Perioada maximă este de 1000 ani');
+      return;
+    }
+
+    setValidityError('');
+    handleSettingChange({
+      certificateSettings: {
+        ...settings.certificateSettings,
+        validityYears: value
+      }
+    });
+  };
+
   if (loading) {
     return (
       <Box sx={{ display: 'flex', justifyContent: 'center', mt: 4 }}>
@@ -125,6 +161,37 @@ const SignatureSettings = () => {
         <Typography variant="body2" color="text.secondary" sx={{ ml: 4 }}>
           Când este activat, un cod QR va fi inclus în semnătură pentru validare rapidă
         </Typography>
+      </Box>
+
+      <Divider sx={{ my: 3 }} />
+
+      <Box sx={{ mt: 3 }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', mb: 2 }}>
+          <Typography variant="h6">
+            Perioada de Valabilitate Certificate
+          </Typography>
+          <Tooltip title="Perioada pentru care certificatele digitale emise în organizație vor fi valabile. Certificatele existente nu vor fi afectate de această setare.">
+            <IconButton size="small" sx={{ ml: 1 }}>
+              <InfoIcon fontSize="small" />
+            </IconButton>
+          </Tooltip>
+        </Box>
+        
+        <TextField
+          label="Perioada de valabilitate (ani)"
+          type="number"
+          value={settings.certificateSettings?.validityYears || 5}
+          onChange={handleValidityChange}
+          error={!!validityError}
+          helperText={validityError || 'Introduceți o valoare între 1 și 1000 ani'}
+          InputProps={{
+            inputProps: { 
+              min: 1,
+              max: 1000
+            }
+          }}
+          sx={{ width: 250 }}
+        />
       </Box>
     </Paper>
   );

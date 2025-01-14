@@ -28,7 +28,8 @@ import {
   ListItemText,
   Checkbox,
   ListItemIcon,
-  ListItemSecondaryAction
+  ListItemSecondaryAction,
+  LinearProgress
 } from '@mui/material';
 import {
   Delete as DeleteIcon,
@@ -44,7 +45,10 @@ import {
   Group as GroupIcon,
   Person as PersonIcon,
   ExpandMore as ExpandMoreIcon,
-  ExpandLess as ExpandLessIcon
+  ExpandLess as ExpandLessIcon,
+  CheckCircle as CheckCircleIcon,
+  RotateRight as RotateRightIcon,
+  DoneAll as DoneAllIcon
 } from '@mui/icons-material';
 import { useSnackbar } from 'notistack';
 import OrgAdminPageHeader from '../common/OrgAdminPageHeader';
@@ -608,10 +612,11 @@ const DocumentManagement = () => {
       if (!doc.signatureConfig || doc.signatureConfig.length === 0) {
         key = 'Fără semnături necesare';
       } else {
-        key = doc.signatureConfig
+        const signatureSequence = doc.signatureConfig
           .sort((a, b) => a.order - b.order)
           .map(sig => getRoleName(sig.role))
           .join(' → ');
+        key = `Secvența semnăturilor: ${signatureSequence}`;
       }
       
       if (!groups[key]) {
@@ -646,6 +651,147 @@ const DocumentManagement = () => {
     
     setExpandedCategories(newExpandedCategories);
     setAllExpanded(newExpandedState);
+  };
+
+  const SignatureProgressIndicator = ({ document }) => {
+    const totalSteps = document.signatureProgress?.totalSteps || 0;
+    const currentStep = document.signatureProgress?.currentStep || 0;
+    const progress = totalSteps > 0 ? (currentStep / totalSteps) * 100 : 0;
+
+    return (
+      <Box sx={{ width: '100%', mb: 1 }}>
+        <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
+          <Typography variant="body2" color="text.secondary">
+            Progres semnături: {currentStep} din {totalSteps}
+          </Typography>
+          <Typography variant="body2" color="text.secondary">
+            {Math.round(progress)}%
+          </Typography>
+        </Box>
+        <LinearProgress 
+          variant="determinate" 
+          value={progress}
+          sx={{ 
+            height: 8,
+            borderRadius: 4,
+            bgcolor: 'grey.200',
+            '& .MuiLinearProgress-bar': {
+              borderRadius: 4,
+              bgcolor: progress === 100 ? 'success.main' : 'primary.main'
+            }
+          }}
+        />
+      </Box>
+    );
+  };
+
+  const SignatureStatus = ({ config, completedSignatures }) => {
+    const isCompleted = completedSignatures?.some(sig => sig.role === config.role);
+    const signature = completedSignatures?.find(sig => sig.role === config.role);
+
+    return (
+      <Box sx={{ 
+        display: 'flex', 
+        alignItems: 'center',
+        gap: 1,
+        p: 1,
+        borderRadius: 1,
+        bgcolor: isCompleted ? 'success.light' : 'grey.100'
+      }}>
+        {config.role === 'admin' && <AdminPanelSettingsIcon sx={{ fontSize: 20 }} />}
+        {config.role === 'collaborator' && <PersonIcon sx={{ fontSize: 20 }} />}
+        {config.role === 'employee' && <GroupIcon sx={{ fontSize: 20 }} />}
+        <Box sx={{ flex: 1 }}>
+          <Typography variant="body2">
+            {getRoleName(config.role)}
+            {isCompleted && (
+              <Typography 
+                component="span" 
+                variant="caption" 
+                sx={{ ml: 1, color: 'text.secondary' }}
+              >
+                (Semnat la {new Date(signature.signedAt).toLocaleString('ro-RO')})
+              </Typography>
+            )}
+          </Typography>
+        </Box>
+        {isCompleted ? (
+          <CheckCircleIcon sx={{ color: 'success.main' }} />
+        ) : (
+          <CircleIcon sx={{ color: 'grey.400' }} />
+        )}
+      </Box>
+    );
+  };
+
+  // Adăugăm componenta pentru iconița de semnare
+  const SignatureActionIcon = ({ document }) => {
+    const hasSignatures = document.signatureConfig && document.signatureConfig.length > 0;
+    const isSigningStarted = document.employeeCopies?.some(copy => copy.status === 'pending_signature');
+    const totalRequiredSignatures = document.signatureConfig?.length || 0;
+    const completedSignaturesCount = document.signatureProgress?.completedSignatures?.length || 0;
+    const isCompleted = totalRequiredSignatures > 0 && completedSignaturesCount === totalRequiredSignatures;
+    
+    const getTooltipText = () => {
+      if (isCompleted) {
+        return 'Toate semnăturile au fost colectate';
+      }
+      if (isSigningStarted) {
+        const sequence = document.signatureConfig
+          .sort((a, b) => a.order - b.order)
+          .map(sig => getRoleName(sig.role))
+          .join(' → ');
+        return `Proces de semnare în curs: ${sequence}`;
+      }
+      return 'Trimite la semnat';
+    };
+
+    if (!hasSignatures) return null;
+
+    const IconComponent = isCompleted ? DoneAllIcon : isSigningStarted ? RotateRightIcon : SendIcon;
+
+    return (
+      <Tooltip title={getTooltipText()}>
+        <span>
+          <IconButton 
+            onClick={!isSigningStarted && !isCompleted ? () => setSendToSignDialog({ open: true, document }) : undefined}
+            color={isCompleted ? "success" : "primary"}
+            size="small"
+            disabled={isSigningStarted || isCompleted}
+            sx={{
+              animation: isSigningStarted ? 'pulse 1.5s ease-in-out infinite' : 'none',
+              '@keyframes pulse': {
+                '0%': {
+                  transform: 'scale(1)',
+                },
+                '50%': {
+                  transform: 'scale(0.9)',
+                },
+                '100%': {
+                  transform: 'scale(1)',
+                },
+              }
+            }}
+          >
+            <IconComponent 
+              fontSize="small"
+              sx={{
+                color: isCompleted ? 'success.main' : isSigningStarted ? 'primary.main' : 'inherit',
+                animation: isSigningStarted ? 'spin 1.5s linear infinite' : 'none',
+                '@keyframes spin': {
+                  '0%': {
+                    transform: 'rotate(0deg)',
+                  },
+                  '100%': {
+                    transform: 'rotate(360deg)',
+                  },
+                }
+              }}
+            />
+          </IconButton>
+        </span>
+      </Tooltip>
+    );
   };
 
   if (loading) {
@@ -711,234 +857,172 @@ const DocumentManagement = () => {
         </Alert>
       )}
 
-      {groupAndSortDocumentsBySignatureConfig(documents).map(([category, docs]) => (
-        <Box key={category} sx={{ mb: 2 }}>
-          <Box
-            onClick={() => handleToggleCategory(category)}
-            sx={{
-              display: 'flex',
-              alignItems: 'center',
-              cursor: 'pointer',
-              mb: 1,
-              '&:hover': {
-                bgcolor: 'rgba(0, 0, 0, 0.04)',
-                borderRadius: 1
-              }
-            }}
-          >
-            <IconButton size="small">
-              {expandedCategories[category] ? <ExpandLessIcon /> : <ExpandMoreIcon />}
-            </IconButton>
-            <Typography 
-              variant="subtitle1"
-              sx={{ 
-                flex: 1,
-                ml: 1,
-                pb: 0.5,
-                fontWeight: 600,
-                borderBottom: '2px solid',
-                borderColor: 'primary.main'
+      {documents.length === 0 ? (
+        <Paper sx={{ p: 3, textAlign: 'center' }}>
+          <Typography variant="body1" color="text.secondary">
+            Nu există documente. Folosiți butonul "Încarcă Document" pentru a adăuga documente noi.
+          </Typography>
+        </Paper>
+      ) : (
+        groupAndSortDocumentsBySignatureConfig(documents).map(([category, docs]) => (
+          <Box key={category} sx={{ mb: 2 }}>
+            <Box
+              onClick={() => handleToggleCategory(category)}
+              sx={{
+                display: 'flex',
+                alignItems: 'center',
+                cursor: 'pointer',
+                mb: 1,
+                '&:hover': {
+                  bgcolor: 'rgba(0, 0, 0, 0.04)',
+                  borderRadius: 1
+                }
               }}
             >
-              {category} ({docs.length})
-            </Typography>
-          </Box>
-          
-          {expandedCategories[category] && (
-            <TableContainer component={Paper}>
-              <Table size="small">
-                <TableHead>
-                  <TableRow sx={{ backgroundColor: 'rgb(248, 249, 250)' }}>
-                    <TableCell padding="checkbox">
-                      <Checkbox
-                        size="small"
-                        indeterminate={
-                          selectedDocuments.length > 0 && 
-                          selectedDocuments.length < docs.length &&
-                          docs.some(doc => selectedDocuments.includes(doc._id))
-                        }
-                        checked={
-                          docs.length > 0 && 
-                          docs.every(doc => selectedDocuments.includes(doc._id))
-                        }
-                        onChange={(event) => {
-                          if (event.target.checked) {
-                            setSelectedDocuments(prev => [
-                              ...prev,
-                              ...docs.map(doc => doc._id).filter(id => !prev.includes(id))
-                            ]);
-                          } else {
-                            setSelectedDocuments(prev => 
-                              prev.filter(id => !docs.map(doc => doc._id).includes(id))
-                            );
+              <IconButton size="small">
+                {expandedCategories[category] ? <ExpandLessIcon /> : <ExpandMoreIcon />}
+              </IconButton>
+              <Typography 
+                variant="subtitle1"
+                sx={{ 
+                  flex: 1,
+                  ml: 1,
+                  pb: 0.5,
+                  fontWeight: 600,
+                  borderBottom: '2px solid',
+                  borderColor: 'primary.main'
+                }}
+              >
+                {category} ({docs.length})
+              </Typography>
+            </Box>
+            
+            {expandedCategories[category] && (
+              <TableContainer component={Paper}>
+                <Table size="small">
+                  <TableHead>
+                    <TableRow sx={{ backgroundColor: 'rgb(248, 249, 250)' }}>
+                      <TableCell padding="checkbox">
+                        <Checkbox
+                          size="small"
+                          indeterminate={
+                            selectedDocuments.length > 0 && 
+                            selectedDocuments.length < docs.length &&
+                            docs.some(doc => selectedDocuments.includes(doc._id))
                           }
-                        }}
-                      />
-                    </TableCell>
-                    <TableCell sx={{ fontWeight: 600, py: 1 }}>Titlu</TableCell>
-                    <TableCell sx={{ fontWeight: 600, py: 1 }}>Nume Fișier</TableCell>
-                    <TableCell sx={{ fontWeight: 600, py: 1 }}>Mărime</TableCell>
-                    <TableCell sx={{ fontWeight: 600, py: 1 }}>Data Încărcării</TableCell>
-                    <TableCell sx={{ fontWeight: 600, py: 1 }}>Status Semnături</TableCell>
-                    <TableCell align="right" sx={{ fontWeight: 600, py: 1 }}>Acțiuni</TableCell>
-                  </TableRow>
-                </TableHead>
-                <TableBody>
-                  {docs.length === 0 ? (
-                    <TableRow>
-                      <TableCell colSpan={7} align="center" sx={{ py: 2 }}>
-                        <Typography variant="body2" color="text.secondary">
-                          Nu există documente în această categorie
-                        </Typography>
+                          checked={
+                            docs.length > 0 && 
+                            docs.every(doc => selectedDocuments.includes(doc._id))
+                          }
+                          onChange={(event) => {
+                            if (event.target.checked) {
+                              setSelectedDocuments(prev => [
+                                ...prev,
+                                ...docs.map(doc => doc._id).filter(id => !prev.includes(id))
+                              ]);
+                            } else {
+                              setSelectedDocuments(prev => 
+                                prev.filter(id => !docs.map(doc => doc._id).includes(id))
+                              );
+                            }
+                          }}
+                        />
                       </TableCell>
+                      <TableCell sx={{ fontWeight: 600, py: 1 }}>Titlu</TableCell>
+                      <TableCell sx={{ fontWeight: 600, py: 1 }}>Nume Fișier</TableCell>
+                      <TableCell sx={{ fontWeight: 600, py: 1 }}>Mărime</TableCell>
+                      <TableCell sx={{ fontWeight: 600, py: 1 }}>Data Încărcării</TableCell>
+                      <TableCell sx={{ fontWeight: 600, py: 1 }}>Status Semnături</TableCell>
+                      <TableCell align="right" sx={{ fontWeight: 600, py: 1 }}>Acțiuni</TableCell>
                     </TableRow>
-                  ) : (
-                    docs.map((doc) => (
-                      <TableRow key={doc._id}>
-                        <TableCell padding="checkbox">
-                          <Checkbox
-                            size="small"
-                            checked={selectedDocuments.includes(doc._id)}
-                            onChange={() => handleSelectDocument(doc._id)}
-                          />
+                  </TableHead>
+                  <TableBody>
+                    {docs.length === 0 ? (
+                      <TableRow>
+                        <TableCell colSpan={7} align="center" sx={{ py: 2 }}>
+                          <Typography variant="body2" color="text.secondary">
+                            Nu există documente în această categorie
+                          </Typography>
                         </TableCell>
-                        <TableCell>
-                          <Tooltip title={doc.title}>
-                            <Typography
-                              variant="body2"
-                              sx={{
-                                maxWidth: 70,
-                                overflow: 'hidden',
-                                textOverflow: 'ellipsis',
-                                whiteSpace: 'nowrap'
-                              }}
-                            >
-                              {doc.title}
-                            </Typography>
-                          </Tooltip>
-                        </TableCell>
-                        <TableCell>
-                          <Tooltip title={doc.originalName}>
-                            <Typography
-                              variant="body2"
-                              sx={{
-                                maxWidth: 70,
-                                overflow: 'hidden',
-                                textOverflow: 'ellipsis',
-                                whiteSpace: 'nowrap'
-                              }}
-                            >
-                              {doc.originalName}
-                            </Typography>
-                          </Tooltip>
-                        </TableCell>
-                        <TableCell>{(doc.fileSize / 1024 / 1024).toFixed(2)} MB</TableCell>
-                        <TableCell>
-                          {doc.uploadedAt ? 
-                            new Date(doc.uploadedAt).toLocaleDateString('ro-RO', {
-                              year: 'numeric',
-                              month: '2-digit',
-                              day: '2-digit'
-                            }) : 
-                            'N/A'
-                          }
-                        </TableCell>
-                        <TableCell>
-                          {doc.signatureConfig && (
-                            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5, minWidth: 150 }}>
-                              {doc.signatureConfig.map((config) => {
-                                const employeeCopy = config.role === 'employee' 
-                                  ? doc.employeeCopies?.find(copy => copy.employee)
-                                  : null;
-
-                                let color;
-                                let progress = 0;
-                                let statusText = '';
-
-                                if (!employeeCopy) {
-                                  color = 'grey.400';
-                                  statusText = 'Nesemnat';
-                                } else if (employeeCopy.status === 'pending_signature') {
-                                  color = '#ff9800';
-                                  progress = 50;
-                                  statusText = 'În așteptare';
-                                } else if (employeeCopy.status === 'signed') {
-                                  color = '#4caf50';
-                                  progress = 100;
-                                  statusText = 'Semnat';
-                                }
-
-                                const getIcon = (role) => {
-                                  switch (role) {
-                                    case 'admin':
-                                      return <AdminPanelSettingsIcon sx={{ fontSize: 16 }} />;
-                                    case 'collaborator':
-                                      return <PersonIcon sx={{ fontSize: 16 }} />;
-                                    case 'employee':
-                                      return <GroupIcon sx={{ fontSize: 16 }} />;
-                                    default:
-                                      return null;
+                      </TableRow>
+                    ) : (
+                      docs.map((doc) => (
+                        <TableRow key={doc._id}>
+                          <TableCell padding="checkbox">
+                            <Checkbox
+                              size="small"
+                              checked={selectedDocuments.includes(doc._id)}
+                              onChange={() => handleSelectDocument(doc._id)}
+                            />
+                          </TableCell>
+                          <TableCell>
+                            <Tooltip title={doc.title}>
+                              <Typography
+                                variant="body2"
+                                sx={{
+                                  maxWidth: 70,
+                                  overflow: 'hidden',
+                                  textOverflow: 'ellipsis',
+                                  whiteSpace: 'nowrap'
+                                }}
+                              >
+                                {doc.title}
+                              </Typography>
+                            </Tooltip>
+                          </TableCell>
+                          <TableCell>
+                            <Tooltip title={doc.originalName}>
+                              <Typography
+                                variant="body2"
+                                sx={{
+                                  maxWidth: 70,
+                                  overflow: 'hidden',
+                                  textOverflow: 'ellipsis',
+                                  whiteSpace: 'nowrap'
+                                }}
+                              >
+                                {doc.originalName}
+                              </Typography>
+                            </Tooltip>
+                          </TableCell>
+                          <TableCell>{(doc.fileSize / 1024 / 1024).toFixed(2)} MB</TableCell>
+                          <TableCell>
+                            {doc.uploadedAt ? 
+                              new Date(doc.uploadedAt).toLocaleDateString('ro-RO', {
+                                year: 'numeric',
+                                month: '2-digit',
+                                day: '2-digit'
+                              }) : 
+                              'N/A'
+                            }
+                          </TableCell>
+                          <TableCell>
+                            {doc.signatureConfig && doc.signatureConfig.length > 0 ? (
+                              <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, minWidth: 200 }}>
+                                <SignatureProgressIndicator document={doc} />
+                                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
+                                  {doc.signatureConfig
+                                    .sort((a, b) => a.order - b.order)
+                                    .map((config, index) => (
+                                      <SignatureStatus 
+                                        key={`${config.role}-${index}`}
+                                        config={config}
+                                        completedSignatures={doc.signatureProgress?.completedSignatures}
+                                      />
+                                    ))
                                   }
-                                };
-
-                                return (
-                                  <Tooltip
-                                    key={config.role}
-                                    title={`${getRoleName(config.role)} - ${statusText}`}
-                                  >
-                                    <Box sx={{ 
-                                      display: 'flex', 
-                                      alignItems: 'center',
-                                      gap: 1
-                                    }}>
-                                      <Box sx={{ 
-                                        color: color,
-                                        display: 'flex',
-                                        alignItems: 'center'
-                                      }}>
-                                        {getIcon(config.role)}
-                                      </Box>
-                                      <Box
-                                        sx={{
-                                          flexGrow: 1,
-                                          height: 4,
-                                          bgcolor: 'grey.200',
-                                          borderRadius: 2,
-                                          position: 'relative',
-                                          overflow: 'hidden'
-                                        }}
-                                      >
-                                        <Box
-                                          sx={{
-                                            width: `${progress}%`,
-                                            height: '100%',
-                                            bgcolor: color,
-                                            position: 'absolute',
-                                            transition: 'all 0.3s ease',
-                                            borderRadius: 2
-                                          }}
-                                        />
-                                      </Box>
-                                    </Box>
-                                  </Tooltip>
-                                );
-                              })}
-                            </Box>
-                          )}
-                        </TableCell>
-                        <TableCell align="right">
-                          <Stack direction="row" spacing={0.5} justifyContent="flex-end">
-                            {doc.signatureConfig && doc.signatureConfig.length > 0 && (
-                              <>
-                                <Tooltip title="Trimite la semnat">
-                                  <IconButton 
-                                    onClick={() => setSendToSignDialog({ open: true, document: doc })}
-                                    color="primary"
-                                    size="small"
-                                  >
-                                    <SendIcon fontSize="small" />
-                                  </IconButton>
-                                </Tooltip>
+                                </Box>
+                              </Box>
+                            ) : (
+                              <Typography variant="body2" color="text.secondary">
+                                Nu necesită semnături
+                              </Typography>
+                            )}
+                          </TableCell>
+                          <TableCell align="right">
+                            <Stack direction="row" spacing={0.5} justifyContent="flex-end">
+                              <SignatureActionIcon document={doc} />
+                              {doc.signatureConfig && doc.signatureConfig.length > 0 && (
                                 <Tooltip title="Vezi status semnături">
                                   <IconButton 
                                     onClick={() => handleViewStatus(doc)}
@@ -948,36 +1032,36 @@ const DocumentManagement = () => {
                                     <InfoIcon fontSize="small" />
                                   </IconButton>
                                 </Tooltip>
-                              </>
-                            )}
-                            <Tooltip title="Descarcă">
-                              <IconButton 
-                                onClick={() => handleDownload(doc)}
-                                size="small"
-                              >
-                                <DownloadIcon fontSize="small" />
-                              </IconButton>
-                            </Tooltip>
-                            <Tooltip title="Șterge">
-                              <IconButton 
-                                color="error" 
-                                onClick={() => setDeleteDialog({ open: true, document: doc })}
-                                size="small"
-                              >
-                                <DeleteIcon fontSize="small" />
-                              </IconButton>
-                            </Tooltip>
-                          </Stack>
-                        </TableCell>
-                      </TableRow>
-                    ))
-                  )}
-                </TableBody>
-              </Table>
-            </TableContainer>
-          )}
-        </Box>
-      ))}
+                              )}
+                              <Tooltip title="Descarcă">
+                                <IconButton 
+                                  onClick={() => handleDownload(doc)}
+                                  size="small"
+                                >
+                                  <DownloadIcon fontSize="small" />
+                                </IconButton>
+                              </Tooltip>
+                              <Tooltip title="Șterge">
+                                <IconButton 
+                                  color="error" 
+                                  onClick={() => setDeleteDialog({ open: true, document: doc })}
+                                  size="small"
+                                >
+                                  <DeleteIcon fontSize="small" />
+                                </IconButton>
+                              </Tooltip>
+                            </Stack>
+                          </TableCell>
+                        </TableRow>
+                      ))
+                    )}
+                  </TableBody>
+                </Table>
+              </TableContainer>
+            )}
+          </Box>
+        ))
+      )}
 
       <Dialog 
         open={openUploadDialog} 
