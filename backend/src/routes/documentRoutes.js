@@ -16,6 +16,6 @@ router.post('/:id/sign/:employeeId', signDocument);
 router.get('/:id/sign/:employeeId/download', downloadDocumentForSigning);
 
 // Rută pentru verificarea semnăturii
-router.get('/:id/verify/:employeeId', authenticateToken, verifySignature);
+router.get('/:id/verify/:signatureId', authenticateToken, verifySignature);
 
 module.exports = router; 

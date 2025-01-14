@@ -51,6 +51,7 @@ const DocumentManagement = () => {
   const { verifySignature, getVerificationResult, clearVerificationData } = useSignature();
   const { enqueueSnackbar } = useSnackbar();
   const [documents, setDocuments] = useState([]);
+  const [employees, setEmployees] = useState([]);
   const [selectedDocuments, setSelectedDocuments] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -67,8 +68,12 @@ const DocumentManagement = () => {
   });
   const [uploadData, setUploadData] = useState({
     title: '',
-    description: '',
-    file: null
+    file: null,
+    requiredSignatures: [
+      { role: 'admin', order: null, required: false },
+      { role: 'instructor', order: null, required: false },
+      { role: 'employee', order: null, required: false }
+    ]
   });
   const [downloading, setDownloading] = useState(false);
   const [sendToSignDialog, setSendToSignDialog] = useState({
@@ -90,8 +95,23 @@ const DocumentManagement = () => {
   const [viewDialogOpen, setViewDialogOpen] = useState(false);
   const [selectedDocument, setSelectedDocument] = useState(null);
 
+  // Helper function to get role name
+  const getRoleName = (role) => {
+    switch (role) {
+      case 'admin':
+        return 'Administrator';
+      case 'instructor':
+        return 'Instructor';
+      case 'employee':
+        return 'Angajat';
+      default:
+        return role;
+    }
+  };
+
   useEffect(() => {
     fetchDocuments();
+    fetchEmployees();
   }, []);
 
   useEffect(() => {
@@ -117,7 +137,17 @@ const DocumentManagement = () => {
       }
 
       const data = await response.json();
-      console.log('Documents data:', data);
+      console.log('=== Response from /api/documents ===');
+      console.log('All documents:', data);
+      data.forEach(doc => {
+        console.log(`Document ${doc._id}:`, {
+          title: doc.title,
+          signatureConfig: doc.signatureConfig,
+          employeeCopies: doc.employeeCopies
+        });
+      });
+      console.log('================================');
+      
       setError(null);
       setDocuments(data);
     } catch (error) {
@@ -128,10 +158,35 @@ const DocumentManagement = () => {
     }
   };
 
+  const fetchEmployees = async () => {
+    try {
+      const token = localStorage.getItem('token');
+      const response = await fetch(`${process.env.REACT_APP_API_URL}/api/employees`, {
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+
+      if (!response.ok) {
+        throw new Error('Eroare la obținerea angajaților');
+      }
+
+      const data = await response.json();
+      setEmployees(data);
+    } catch (error) {
+      console.error('Error fetching employees:', error);
+      setEmployees([]);
+    }
+  };
+
   const handleCloseUploadDialog = () => {
     setOpenUploadDialog(false);
     setUploadError(null);
-    setUploadData({ title: '', description: '', file: null });
+    setUploadData({ title: '', file: null, requiredSignatures: [
+      { role: 'admin', order: null, required: false },
+      { role: 'instructor', order: null, required: false },
+      { role: 'employee', order: null, required: false }
+    ] });
   };
 
   const handleUpload = async (e) => {
@@ -145,7 +200,18 @@ const DocumentManagement = () => {
       const formData = new FormData();
       formData.append('file', uploadData.file);
       formData.append('title', uploadData.title);
-      formData.append('description', uploadData.description);
+      
+      // Adăugăm configurația semnăturilor
+      const signatureConfig = uploadData.requiredSignatures
+        .filter(sig => sig.required)
+        .sort((a, b) => a.order - b.order)
+        .map(sig => ({
+          role: sig.role,
+          order: sig.order
+        }));
+      
+      // Dacă nu sunt semnături selectate, trimitem un array gol
+      formData.append('signatureConfig', JSON.stringify(signatureConfig));
 
       const token = localStorage.getItem('token');
       const response = await fetch(`${process.env.REACT_APP_API_URL}/api/documents`, {
@@ -164,10 +230,33 @@ const DocumentManagement = () => {
       const document = await response.json();
       setDocuments([document, ...documents]);
       handleCloseUploadDialog();
+      
+      // Mesaj de succes cu configurare specifică pentru vizibilitate
+      const successMessage = signatureConfig.length > 0 
+        ? `Documentul a fost încărcat cu succes și necesită ${signatureConfig.length} ${signatureConfig.length === 1 ? 'semnătură' : 'semnături'}`
+        : 'Documentul a fost încărcat cu succes și nu necesită semnături';
+        
+      enqueueSnackbar(successMessage, {
+        variant: 'success',
+        anchorOrigin: {
+          vertical: 'top',
+          horizontal: 'center'
+        },
+        autoHideDuration: 5000,
+        preventDuplicate: true
+      });
     } catch (error) {
       setUploadError(error.message);
-    } finally {
-      setLoading(false);
+      // Mesaj de eroare cu configurare specifică pentru vizibilitate
+      enqueueSnackbar(error.message, {
+        variant: 'error',
+        anchorOrigin: {
+          vertical: 'top',
+          horizontal: 'center'
+        },
+        autoHideDuration: 5000,
+        preventDuplicate: true
+      });
     }
   };
 
@@ -330,23 +419,11 @@ const DocumentManagement = () => {
     handleSignDialogClose();
   };
 
-  const handleViewStatus = async (doc) => {
+  const handleViewStatus = (doc) => {
     setStatusDialog({
       open: true,
       document: doc
     });
-    
-    // Verificăm toate semnăturile când se deschide dialogul
-    const signedCopies = doc.employeeCopies.filter(copy => copy.status === 'signed');
-    await Promise.all(
-      signedCopies.map(async (copy) => {
-        try {
-          await verifySignature(doc._id, copy.employee);
-        } catch (error) {
-          console.error('Error verifying signature:', error);
-        }
-      })
-    );
   };
 
   const handleStatusDialogClose = () => {
@@ -356,41 +433,15 @@ const DocumentManagement = () => {
     });
   };
 
-  const handleVerifyClick = async (copy) => {
+  const handleVerifyClick = async (documentId, signatureId) => {
     try {
-      setVerifyDialog({
-        open: true,
-        document: statusDialog.document,
-        employeeCopy: copy
-      });
-      setVerificationResult(null);
-
-      const result = await verifySignature(statusDialog.document._id, copy.employee);
-      
-      if (!result) {
-        throw new Error('Nu s-a putut verifica semnătura');
-      }
-
-      setVerificationResult({
-        isValid: result.isValid,
-        error: result.error || result.message,
-        documentHash: result.details?.documentHash,
-        signedAt: copy.signedAt || result.details?.signedAt,
-        signatureTimestamp: result.details?.signatureTimestamp,
-        employeeName: copy.employeeName,
-        employeeEmail: copy.employeeEmail,
-        organizationName: statusDialog.document.organizationName
-      });
+      const result = await verifySignature(documentId, signatureId);
+      console.log('Verification result:', result);
+      return result;
     } catch (error) {
       console.error('Error verifying signature:', error);
-      setVerificationResult({
-        isValid: false,
-        error: error.message || 'Eroare la verificarea semnăturii',
-        employeeName: copy.employeeName,
-        employeeEmail: copy.employeeEmail,
-        organizationName: statusDialog.document.organizationName,
-        signedAt: copy.signedAt
-      });
+      enqueueSnackbar('Eroare la verificarea semnăturii', { variant: 'error' });
+      throw error;
     }
   };
 
@@ -467,17 +518,39 @@ const DocumentManagement = () => {
       });
 
       if (!response.ok) {
-        throw new Error('Eroare la ștergerea documentelor');
+        const errorData = await response.json();
+        throw new Error(errorData.message || 'Eroare la ștergerea documentelor');
       }
 
       const result = await response.json();
-      setDocuments(documents.filter(doc => !selectedDocuments.includes(doc._id)));
+      
+      // Reîmprospătăm lista de documente de la server
+      await fetchDocuments();
+      
       setSelectedDocuments([]);
       handleDeleteCancel();
-      enqueueSnackbar(`${result.deletedCount} documente au fost șterse cu succes`, { variant: 'success' });
+      enqueueSnackbar(`${result.deletedCount} documente au fost șterse cu succes`, { 
+        variant: 'success',
+        anchorOrigin: {
+          vertical: 'top',
+          horizontal: 'center'
+        },
+        autoHideDuration: 5000
+      });
     } catch (error) {
+      console.error('Error during bulk delete:', error);
       setError(error.message);
-      enqueueSnackbar(error.message, { variant: 'error' });
+      enqueueSnackbar(error.message || 'Eroare la ștergerea documentelor', { 
+        variant: 'error',
+        anchorOrigin: {
+          vertical: 'top',
+          horizontal: 'center'
+        },
+        autoHideDuration: 5000
+      });
+      
+      // Reîmprospătăm oricum lista pentru a ne asigura că este sincronizată
+      await fetchDocuments();
     }
   };
 
@@ -488,6 +561,32 @@ const DocumentManagement = () => {
       employeeCopies: [employeeCopy]
     });
     setViewDialogOpen(true);
+  };
+
+  const handleSignatureSelect = (index) => {
+    const newSigs = [...uploadData.requiredSignatures];
+    const currentSig = newSigs[index];
+    
+    if (currentSig.required) {
+      // Dacă deselectăm, resetăm ordinea și actualizăm restul ordinelor
+      const oldOrder = currentSig.order;
+      currentSig.required = false;
+      currentSig.order = null;
+      
+      // Actualizăm ordinea pentru restul semnăturilor
+      newSigs.forEach(sig => {
+        if (sig.order > oldOrder) {
+          sig.order -= 1;
+        }
+      });
+    } else {
+      // Dacă selectăm, adăugăm următorul număr disponibil
+      const maxOrder = Math.max(...newSigs.filter(s => s.required).map(s => s.order || 0), 0);
+      currentSig.required = true;
+      currentSig.order = maxOrder + 1;
+    }
+    
+    setUploadData({ ...uploadData, requiredSignatures: newSigs });
   };
 
   if (loading) {
@@ -553,9 +652,7 @@ const DocumentManagement = () => {
                 />
               </TableCell>
               <TableCell sx={{ fontWeight: 700 }}>Titlu</TableCell>
-              <TableCell sx={{ fontWeight: 700 }}>Descriere</TableCell>
               <TableCell sx={{ fontWeight: 700 }}>Nume Fișier</TableCell>
-              <TableCell sx={{ fontWeight: 700 }}>Tip Fișier</TableCell>
               <TableCell sx={{ fontWeight: 700 }}>Mărime</TableCell>
               <TableCell sx={{ fontWeight: 700 }}>Data Încărcării</TableCell>
               <TableCell sx={{ fontWeight: 700 }}>Status Semnături</TableCell>
@@ -565,7 +662,7 @@ const DocumentManagement = () => {
           <TableBody>
             {documents.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={9} align="center" sx={{ py: 3 }}>
+                <TableCell colSpan={7} align="center" sx={{ py: 3 }}>
                   <Typography variant="body1" color="text.secondary">
                     Nu există documente încărcate
                   </Typography>
@@ -580,21 +677,36 @@ const DocumentManagement = () => {
                       onChange={() => handleSelectDocument(doc._id)}
                     />
                   </TableCell>
-                  <TableCell>{doc.title}</TableCell>
                   <TableCell>
-                    <Typography
-                      variant="body2"
-                      sx={{
-                        maxWidth: 250,
-                        color: doc.description ? 'text.primary' : 'text.secondary',
-                        fontStyle: doc.description ? 'normal' : 'italic'
-                      }}
-                    >
-                      {doc.description || 'Fără descriere'}
-                    </Typography>
+                    <Tooltip title={doc.title}>
+                      <Typography
+                        variant="body2"
+                        sx={{
+                          maxWidth: 70,
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          whiteSpace: 'nowrap'
+                        }}
+                      >
+                        {doc.title}
+                      </Typography>
+                    </Tooltip>
                   </TableCell>
-                  <TableCell>{doc.originalName}</TableCell>
-                  <TableCell>{doc.fileType}</TableCell>
+                  <TableCell>
+                    <Tooltip title={doc.originalName}>
+                      <Typography
+                        variant="body2"
+                        sx={{
+                          maxWidth: 70,
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          whiteSpace: 'nowrap'
+                        }}
+                      >
+                        {doc.originalName}
+                      </Typography>
+                    </Tooltip>
+                  </TableCell>
                   <TableCell>{(doc.fileSize / 1024 / 1024).toFixed(2)} MB</TableCell>
                   <TableCell>
                     {doc.uploadedAt ? 
@@ -607,31 +719,96 @@ const DocumentManagement = () => {
                     }
                   </TableCell>
                   <TableCell>
-                    {doc.employeeCopies ? (
-                      <>
-                        {doc.employeeCopies.filter(copy => copy.status === 'signed').length}/
-                        {doc.employeeCopies.length} semnate
-                      </>
-                    ) : (
-                      'N/A'
+                    {doc.signatureConfig && (
+                      <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, minWidth: 200 }}>
+                        {doc.signatureConfig.map((config) => {
+                          // Pentru rolul "employee", verificăm copiile documentului
+                          // Pentru admin și instructor, nu avem încă implementare, deci rămân gri
+                          const employeeCopy = config.role === 'employee' 
+                            ? doc.employeeCopies?.find(copy => copy.employee) // Orice angajat este considerat "employee"
+                            : null;
+
+                          // Determinăm statusul și culoarea
+                          let color;
+                          let progress = 0;
+                          let statusText = '';
+
+                          if (!employeeCopy) {
+                            color = 'grey.400'; // Gri pentru nesemnat sau roluri neimplementate (admin, instructor)
+                            statusText = 'Nesemnat';
+                          } else if (employeeCopy.status === 'pending_signature') {
+                            color = '#ff9800'; // Portocaliu pentru în așteptare
+                            progress = 50;
+                            statusText = 'În așteptare';
+                          } else if (employeeCopy.status === 'signed') {
+                            color = '#4caf50'; // Verde pentru semnat
+                            progress = 100;
+                            statusText = 'Semnat';
+                          }
+
+                          return (
+                            <Tooltip
+                              key={config.role}
+                              title={`${getRoleName(config.role)} - ${statusText}`}
+                            >
+                              <Box sx={{ width: '100%' }}>
+                                <Box sx={{ 
+                                  display: 'flex', 
+                                  alignItems: 'center',
+                                  gap: 1,
+                                  mb: 0.5 
+                                }}>
+                                  <Typography variant="caption" sx={{ minWidth: 80 }}>
+                                    {getRoleName(config.role)}
+                                  </Typography>
+                                  <Typography variant="caption" sx={{ color: 'text.secondary' }}>
+                                    {progress}%
+                                  </Typography>
+                                </Box>
+                                <Box
+                                  sx={{
+                                    width: '100%',
+                                    height: 8,
+                                    bgcolor: 'grey.200',
+                                    borderRadius: 1,
+                                    position: 'relative',
+                                    overflow: 'hidden'
+                                  }}
+                                >
+                                  <Box
+                                    sx={{
+                                      width: `${progress}%`,
+                                      height: '100%',
+                                      bgcolor: color,
+                                      position: 'absolute',
+                                      transition: 'all 0.3s ease',
+                                      borderRadius: 1
+                                    }}
+                                  />
+                                </Box>
+                              </Box>
+                            </Tooltip>
+                          );
+                        })}
+                      </Box>
                     )}
                   </TableCell>
                   <TableCell align="right">
                     <Stack direction="row" spacing={1} justifyContent="flex-end">
-                      <Tooltip title="Vezi status semnături">
-                        <IconButton 
-                          onClick={() => handleViewStatus(doc)}
-                          color="info"
-                        >
-                          <InfoIcon />
-                        </IconButton>
-                      </Tooltip>
                       <Tooltip title="Trimite la semnat">
                         <IconButton 
                           onClick={() => setSendToSignDialog({ open: true, document: doc })}
                           color="primary"
                         >
                           <SendIcon />
+                        </IconButton>
+                      </Tooltip>
+                      <Tooltip title="Vezi status semnături">
+                        <IconButton 
+                          onClick={() => handleViewStatus(doc)}
+                          color="info"
+                        >
+                          <InfoIcon />
                         </IconButton>
                       </Tooltip>
                       <Tooltip title="Descarcă">
@@ -656,7 +833,12 @@ const DocumentManagement = () => {
         </Table>
       </TableContainer>
 
-      <Dialog open={openUploadDialog} onClose={handleCloseUploadDialog}>
+      <Dialog 
+        open={openUploadDialog} 
+        onClose={handleCloseUploadDialog}
+        maxWidth="sm"
+        fullWidth
+      >
         <DialogTitle>Încarcă Document</DialogTitle>
         <DialogContent>
           <Box component="form" onSubmit={handleUpload} sx={{ mt: 2 }}>
@@ -673,45 +855,94 @@ const DocumentManagement = () => {
               onChange={(e) => setUploadData({ ...uploadData, title: e.target.value })}
               sx={{ mb: 2 }}
             />
-            <TextField
-              fullWidth
-              label="Descriere"
-              multiline
-              rows={4}
-              value={uploadData.description}
-              onChange={(e) => setUploadData({ ...uploadData, description: e.target.value })}
-              sx={{ mb: 2 }}
-            />
-            <input
-              type="file"
-              onChange={handleFileSelect}
-              style={{ display: 'none' }}
-              id="file-input"
-              accept=".pdf,application/pdf"
-            />
-            <label htmlFor="file-input">
-              <Button
-                variant="outlined"
-                component="span"
-                startIcon={<UploadIcon />}
-                fullWidth
-              >
-                {uploadData.file ? uploadData.file.name : 'Selectează Fișier PDF'}
-              </Button>
-            </label>
-            {!uploadData.file && (
-              <Typography variant="caption" display="block" sx={{ mt: 1, color: 'text.secondary' }}>
-                Doar fișiere PDF sunt acceptate
-              </Typography>
-            )}
-            {uploadData.file && (
-              <Typography variant="caption" display="block" sx={{ mt: 1, color: 'text.secondary' }}>
-                Mărime: {(uploadData.file.size / 1024 / 1024).toFixed(2)} MB
-              </Typography>
-            )}
+
+            <Typography variant="subtitle1" sx={{ mb: 2, fontWeight: 500 }}>
+              Configurarea ordinii semnăturilor
+            </Typography>
+            
+            <Box sx={{ mb: 3 }}>
+              {uploadData.requiredSignatures.map((sig, index) => (
+                <Box 
+                  key={sig.role} 
+                  sx={{ 
+                    display: 'flex', 
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    mb: 1,
+                    p: 1.5,
+                    borderRadius: 1,
+                    bgcolor: sig.required ? 'primary.50' : 'grey.50',
+                    transition: 'all 0.2s ease'
+                  }}
+                >
+                  <Box sx={{ display: 'flex', alignItems: 'center' }}>
+                    {sig.required && sig.order && (
+                      <Typography 
+                        variant="body2" 
+                        sx={{ 
+                          minWidth: 24,
+                          height: 24,
+                          borderRadius: '50%',
+                          bgcolor: 'primary.main',
+                          color: 'white',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          mr: 1.5,
+                          fontSize: '0.875rem'
+                        }}
+                      >
+                        {sig.order}
+                      </Typography>
+                    )}
+                    <Typography variant="body1">
+                      {sig.role === 'admin' && 'Administrator'}
+                      {sig.role === 'instructor' && 'Instructor'}
+                      {sig.role === 'employee' && 'Angajat'}
+                    </Typography>
+                  </Box>
+                  <Checkbox
+                    checked={sig.required}
+                    onChange={() => handleSignatureSelect(index)}
+                    color="primary"
+                  />
+                </Box>
+              ))}
+            </Box>
+
+            <Box sx={{ mb: 2 }}>
+              <input
+                type="file"
+                onChange={handleFileSelect}
+                style={{ display: 'none' }}
+                id="file-input"
+                accept=".pdf,application/pdf"
+              />
+              <label htmlFor="file-input">
+                <Button
+                  variant="outlined"
+                  component="span"
+                  startIcon={<UploadIcon />}
+                  fullWidth
+                  sx={{ py: 1.5 }}
+                >
+                  {uploadData.file ? uploadData.file.name : 'Selectează Fișier PDF'}
+                </Button>
+              </label>
+              {!uploadData.file && (
+                <Typography variant="caption" display="block" sx={{ mt: 1, color: 'text.secondary' }}>
+                  Doar fișiere PDF sunt acceptate
+                </Typography>
+              )}
+              {uploadData.file && (
+                <Typography variant="caption" display="block" sx={{ mt: 1, color: 'text.secondary' }}>
+                  Mărime: {(uploadData.file.size / 1024 / 1024).toFixed(2)} MB
+                </Typography>
+              )}
+            </Box>
           </Box>
         </DialogContent>
-        <DialogActions>
+        <DialogActions sx={{ px: 3, pb: 2 }}>
           <Button onClick={handleCloseUploadDialog}>Anulează</Button>
           <Button 
             onClick={handleUpload} 

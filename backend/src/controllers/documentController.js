@@ -18,7 +18,7 @@ const upload = multer({ storage: multer.memoryStorage() }).single('file');
 exports.getAllDocuments = async (req, res) => {
   try {
     const documents = await Document.find({ organization: req.user.organization })
-      .select('title description originalName fileType fileUrl fileSize uploadedAt organization employeeCopies')
+      .select('title description originalName fileType fileUrl fileSize uploadedAt organization employeeCopies signatureConfig')
       .sort({ uploadedAt: -1 });
 
     // Obținem toți angajații organizației
@@ -51,84 +51,90 @@ exports.getAllDocuments = async (req, res) => {
 };
 
 exports.uploadDocument = async (req, res) => {
-  try {
-    upload(req, res, async (err) => {
-      if (err) return res.status(400).json({ message: err.message });
-      if (!req.file) return res.status(400).json({ message: 'Niciun fișier încărcat' });
+  upload(req, res, async (err) => {
+    if (err) return res.status(400).json({ message: err.message });
+    if (!req.file) return res.status(400).json({ message: 'Niciun fișier încărcat' });
 
-      // Validăm că fișierul este PDF
-      if (req.file.mimetype !== 'application/pdf') {
-        return res.status(400).json({ message: 'Sunt acceptate doar fișiere PDF' });
+    // Validăm că fișierul este PDF
+    if (req.file.mimetype !== 'application/pdf') {
+      return res.status(400).json({ message: 'Sunt acceptate doar fișiere PDF' });
+    }
+
+    const { title, description, signatureConfig } = req.body;
+    const file = req.file;
+
+    const organization = await Organization.findById(req.user.organization);
+    if (!organization) {
+      return res.status(404).json({ message: 'Organizația nu a fost găsită' });
+    }
+
+    try {
+      const uploadResult = await storage.uploadFile(file, req.user.organization, organization.name);
+      console.log('Upload result:', uploadResult);
+
+      if (!uploadResult.path) {
+        throw new Error('Upload result missing file path');
       }
 
-      const { title, description } = req.body;
-      const file = req.file;
-
-      const organization = await Organization.findById(req.user.organization);
-      if (!organization) {
-        return res.status(404).json({ message: 'Organizația nu a fost găsită' });
-      }
-
-      try {
-        const uploadResult = await storage.uploadFile(file, req.user.organization, organization.name);
-        console.log('Upload result:', uploadResult);
-
-        if (!uploadResult.path) {
-          throw new Error('Upload result missing file path');
+      // Parsăm configurația semnăturilor
+      let parsedSignatureConfig = [];
+      if (signatureConfig) {
+        try {
+          parsedSignatureConfig = JSON.parse(signatureConfig);
+        } catch (error) {
+          console.error('Error parsing signature config:', error);
+          return res.status(400).json({ message: 'Configurația semnăturilor este invalidă' });
         }
-
-        const document = new Document({
-          title,
-          description,
-          originalName: file.originalname,
-          fileUrl: uploadResult.url,
-          fileType: file.mimetype,
-          fileSize: file.size,
-          organization: req.user.organization,
-          uploadedBy: req.user.userId
-        });
-        await document.save();
-
-        const employees = await Employee.find({ organization: req.user.organization });
-        
-        console.log('Found employees:', employees);
-        console.log('Source file path:', uploadResult.path);
-        
-        const employeeCopies = await Promise.all(employees.map(async (employee) => {
-          const employeePath = createEmployeeFolder(
-            organization.name, 
-            `${employee.firstName}_${employee.lastName}`
-          );
-          
-          console.log('Employee folder:', employeePath);
-          
-          const documentPath = await copyDocumentToEmployee(
-            uploadResult.path,
-            employeePath,
-            file.originalname
-          );
-          
-          return {
-            employee: employee._id,
-            path: documentPath
-          };
-        }));
-
-        document.employeeCopies = employeeCopies;
-        await document.save();
-
-        res.status(201).json(document);
-      } catch (error) {
-        if (error.message === 'Un fișier cu acest nume există deja') {
-          return res.status(400).json({ message: error.message });
-        }
-        throw error;
       }
-    });
-  } catch (error) {
-    console.error('Error uploading document:', error);
-    res.status(500).json({ message: 'Eroare la încărcarea documentului' });
-  }
+
+      const document = new Document({
+        title,
+        description,
+        originalName: file.originalname,
+        fileUrl: uploadResult.url,
+        fileType: file.mimetype,
+        fileSize: file.size,
+        organization: req.user.organization,
+        uploadedBy: req.user.userId,
+        signatureConfig: parsedSignatureConfig
+      });
+
+      await document.save();
+
+      const employees = await Employee.find({ organization: req.user.organization });
+      
+      console.log('Found employees:', employees);
+      console.log('Source file path:', uploadResult.path);
+      
+      const employeeCopies = await Promise.all(employees.map(async (employee) => {
+        const employeePath = createEmployeeFolder(
+          organization.name, 
+          `${employee.firstName}_${employee.lastName}`
+        );
+        
+        console.log('Employee folder:', employeePath);
+        
+        const documentPath = await copyDocumentToEmployee(
+          uploadResult.path,
+          employeePath,
+          file.originalname
+        );
+        
+        return {
+          employee: employee._id,
+          path: documentPath
+        };
+      }));
+
+      document.employeeCopies = employeeCopies;
+      await document.save();
+
+      res.status(201).json(document);
+    } catch (error) {
+      console.error('Error uploading document:', error);
+      res.status(500).json({ message: 'Eroare la încărcarea documentului: ' + error.message });
+    }
+  });
 };
 
 exports.deleteDocument = async (req, res) => {
@@ -740,119 +746,45 @@ exports.downloadDocumentForSigning = async (req, res) => {
 
 exports.verifySignature = async (req, res) => {
   try {
-    const { id: documentId, signatureId } = req.params;
-    console.log('Starting signature verification:', { documentId, signatureId });
+    const { id, signatureId } = req.params;
 
-    // Găsim documentul care conține semnătura specificată
-    const document = await Document.findOne({
-      _id: documentId,
-      'employeeCopies.signatureId': signatureId
-    });
-
+    // Găsește documentul
+    const document = await Document.findById(id);
     if (!document) {
-      console.log('Document not found:', { documentId, signatureId });
-      return res.status(404).json({ 
-        isValid: false,
-        error: 'Documentul nu a fost găsit'
-      });
+      return res.status(404).json({ message: 'Documentul nu a fost găsit' });
     }
 
-    console.log('Document found:', {
-      id: document._id,
-      title: document.title
-    });
-
-    // Găsim copia specifică cu signatureId-ul dat
-    const employeeCopy = document.employeeCopies.find(
-      copy => copy.signatureId === signatureId
-    );
-
-    if (!employeeCopy) {
-      console.log('Employee copy not found for signature:', signatureId);
-      return res.status(404).json({ 
-        isValid: false,
-        error: 'Semnătura nu a fost găsită'
-      });
+    // Găsește copia semnată folosind signatureId
+    const signedCopy = document.employeeCopies.find(copy => copy._id.toString() === signatureId);
+    if (!signedCopy) {
+      return res.status(404).json({ message: 'Semnătura nu a fost găsită' });
     }
 
-    console.log('Employee copy found:', {
-      employeeId: employeeCopy.employee,
-      status: employeeCopy.status,
-      signedAt: employeeCopy.signedAt
-    });
-
-    if (employeeCopy.status !== 'signed') {
-      console.log('Document is not signed:', { status: employeeCopy.status });
-      return res.status(400).json({ 
-        isValid: false,
-        error: 'Documentul nu este semnat'
-      });
+    // Verifică dacă documentul este semnat
+    if (signedCopy.status !== 'signed') {
+      return res.status(400).json({ message: 'Documentul nu este semnat' });
     }
 
-    // Verificăm dacă avem toate informațiile necesare
-    if (!employeeCopy.documentHash || !employeeCopy.digitalSignature || !employeeCopy.publicKey) {
-      console.log('Missing required signature information:', {
-        hasHash: !!employeeCopy.documentHash,
-        hasSignature: !!employeeCopy.digitalSignature,
-        hasPublicKey: !!employeeCopy.publicKey
-      });
-      return res.status(400).json({ 
-        isValid: false,
-        error: 'Lipsesc informații necesare pentru verificarea semnăturii'
-      });
-    }
-
-    // Recalculăm hash-ul documentului pentru verificare
-    console.log('Reading document from path:', employeeCopy.path);
-    const documentBuffer = await fs.promises.readFile(employeeCopy.path);
-    const currentHash = DigitalSignatureService.calculateDocumentHash(documentBuffer);
-    console.log('Document hash calculated:', { 
-      stored: employeeCopy.documentHash,
-      current: currentHash
-    });
-
-    // Verificăm dacă hash-ul documentului s-a schimbat
-    if (currentHash !== employeeCopy.documentHash) {
-      console.log('Document hash mismatch');
-      return res.status(400).json({ 
-        isValid: false,
-        error: 'Documentul a fost modificat după semnare'
-      });
-    }
-
-    // Verificăm semnătura digitală
-    console.log('Verifying digital signature');
+    // Verifică semnătura digitală folosind DigitalSignatureService
     const isValid = DigitalSignatureService.verifySignature(
-      employeeCopy.documentHash,
-      employeeCopy.digitalSignature,
-      employeeCopy.publicKey
+      signedCopy.documentHash,
+      signedCopy.digitalSignature,
+      signedCopy.publicKey
     );
-    console.log('Signature verification result:', { isValid });
 
-    if (!isValid) {
-      return res.status(400).json({ 
-        isValid: false,
-        error: 'Semnătura digitală nu este validă'
-      });
-    }
-
-    // Returnăm rezultatul verificării
-    res.json({
-      isValid: true,
-      message: 'Semnătura digitală este validă',
-      details: {
-        documentHash: employeeCopy.documentHash,
-        signedAt: employeeCopy.signedAt,
-        signatureTimestamp: employeeCopy.signatureTimestamp,
-        signedBy: `${employeeCopy.employee.firstName} ${employeeCopy.employee.lastName}`
-      }
+    // Găsește angajatul pentru a include numele în răspuns
+    const employee = await Employee.findById(signedCopy.employee);
+    
+    return res.json({
+      isValid,
+      signedBy: employee ? `${employee.firstName} ${employee.lastName}` : 'Unknown',
+      signedAt: signedCopy.signedAt,
+      documentHash: signedCopy.documentHash
     });
+
   } catch (error) {
-    console.error('Error verifying signature:', error);
-    res.status(500).json({ 
-      isValid: false,
-      error: 'Eroare la verificarea semnăturii: ' + error.message
-    });
+    console.error('Eroare la verificarea semnăturii:', error);
+    return res.status(500).json({ message: 'Eroare la verificarea semnăturii' });
   }
 };
 

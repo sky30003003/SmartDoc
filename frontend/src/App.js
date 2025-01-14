@@ -30,6 +30,7 @@ import { SignatureProvider } from './context/SignatureContext';
 import DigitalSignatureInfo from './components/info/DigitalSignatureInfo';
 import PublicVerification from './components/verification/PublicVerification';
 import OrganizationSettings from './pages/OrganizationSettings';
+import { SnackbarProvider } from 'notistack';
 
 const DefaultRoute = () => {
   const { currentUser } = useAuth();
@@ -53,176 +54,178 @@ const App = () => {
   return (
     <ThemeProvider theme={theme}>
       <CssBaseline />
-      <div className="App">
-        <AuthProvider>
-          <SignatureProvider>
-            <Router>
-              <Routes>
-                <Route path="/login" element={<Login />} />
-                <Route path="/sign-document/:documentId/:employeeId" element={<SignDocument />} />
-                <Route path="/verify/:documentId/:signatureId" element={<PublicVerification />} />
-                <Route
-                  path="/*"
-                  element={
-                    <ProtectedRoute>
-                      <Layout>
-                        <Routes>
-                          <Route path="/" element={<DefaultRoute />} />
-                          <Route 
-                            path="/dashboard" 
-                            element={
-                              <AdminRoute>
-                                <AdminDashboard />
-                              </AdminRoute>
-                            } 
-                          />
-                          <Route 
-                            path="/employees" 
-                            element={
-                              <OrgAdminRoute>
-                                <EmployeeManagement />
-                              </OrgAdminRoute>
-                            } 
-                          />
-                          <Route 
-                            path="/collaborators" 
-                            element={
-                              <OrgAdminRoute>
-                                <CollaboratorManagement />
-                              </OrgAdminRoute>
-                            } 
-                          />
-                          <Route 
-                            path="/documents" 
-                            element={
-                              <OrgAdminRoute>
-                                <DocumentManagement />
-                              </OrgAdminRoute>
-                            } 
-                          />
-                          <Route 
-                            path="/organizations/new" 
-                            element={
-                              <AdminRoute>
-                                <CreateOrganization />
-                              </AdminRoute>
-                            } 
-                          />
-                          <Route 
-                            path="/organizations/:id/edit" 
-                            element={
-                              <AdminRoute>
-                                <EditOrganization />
-                              </AdminRoute>
-                            } 
-                          />
-                          <Route 
-                            path="/organizations" 
-                            element={
-                              <AdminRoute>
-                                <OrganizationList />
-                              </AdminRoute>
-                            } 
-                          />
-                          <Route 
-                            path="/organizations/:id" 
-                            element={
-                              <AdminRoute>
-                                <ViewOrganization />
-                              </AdminRoute>
-                            } 
-                          />
-                          <Route 
-                            path="/org-admin" 
-                            element={
-                              <OrgAdminRoute>
-                                <OrgAdminDashboard />
-                              </OrgAdminRoute>
-                            } 
-                          />
-                          <Route 
-                            path="/org-admin/documents" 
-                            element={
-                              <OrgAdminRoute>
-                                <DocumentManagement />
-                              </OrgAdminRoute>
-                            } 
-                          />
-                          <Route 
-                            path="/org-admin/employees" 
-                            element={
-                              <OrgAdminRoute>
-                                <EmployeeManagement />
-                              </OrgAdminRoute>
-                            } 
-                          />
-                          <Route 
-                            path="/org-admin/employees/:id" 
-                            element={
-                              <OrgAdminRoute>
-                                <ViewEmployee />
-                              </OrgAdminRoute>
-                            } 
-                          />
-                          <Route 
-                            path="/org-admin/employees/:id/edit" 
-                            element={
-                              <OrgAdminRoute>
-                                <EditEmployee />
-                              </OrgAdminRoute>
-                            } 
-                          />
-                          <Route 
-                            path="/org-admin/collaborators" 
-                            element={
-                              <OrgAdminRoute>
-                                <CollaboratorManagement />
-                              </OrgAdminRoute>
-                            } 
-                          />
-                          <Route 
-                            path="/org-admin/settings" 
-                            element={
-                              <OrgAdminRoute>
-                                <OrganizationSettings />
-                              </OrgAdminRoute>
-                            } 
-                          />
-                          <Route 
-                            path="/admin/documents" 
-                            element={
-                              <AdminRoute>
-                                <AdminDocumentList />
-                              </AdminRoute>
-                            } 
-                          />
-                          <Route 
-                            path="/admin/employees" 
-                            element={
-                              <AdminRoute>
-                                <AdminEmployeeList />
-                              </AdminRoute>
-                            } 
-                          />
-                          <Route 
-                            path="/admin/collaborators" 
-                            element={
-                              <AdminRoute>
-                                <AdminCollaboratorList />
-                              </AdminRoute>
-                            } 
-                          />
-                          <Route path="/admin/digital-signature-info" element={<DigitalSignatureInfo />} />
-                        </Routes>
-                      </Layout>
-                    </ProtectedRoute>
-                  }
-                />
-              </Routes>
-            </Router>
-          </SignatureProvider>
-        </AuthProvider>
-      </div>
+      <SnackbarProvider maxSnack={3}>
+        <div className="App">
+          <AuthProvider>
+            <SignatureProvider>
+              <Router>
+                <Routes>
+                  <Route path="/login" element={<Login />} />
+                  <Route path="/sign-document/:documentId/:employeeId" element={<SignDocument />} />
+                  <Route path="/verify/:documentId/:signatureId" element={<PublicVerification />} />
+                  <Route
+                    path="/*"
+                    element={
+                      <ProtectedRoute>
+                        <Layout>
+                          <Routes>
+                            <Route path="/" element={<DefaultRoute />} />
+                            <Route 
+                              path="/dashboard" 
+                              element={
+                                <AdminRoute>
+                                  <AdminDashboard />
+                                </AdminRoute>
+                              } 
+                            />
+                            <Route 
+                              path="/employees" 
+                              element={
+                                <OrgAdminRoute>
+                                  <EmployeeManagement />
+                                </OrgAdminRoute>
+                              } 
+                            />
+                            <Route 
+                              path="/collaborators" 
+                              element={
+                                <OrgAdminRoute>
+                                  <CollaboratorManagement />
+                                </OrgAdminRoute>
+                              } 
+                            />
+                            <Route 
+                              path="/documents" 
+                              element={
+                                <OrgAdminRoute>
+                                  <DocumentManagement />
+                                </OrgAdminRoute>
+                              } 
+                            />
+                            <Route 
+                              path="/organizations/new" 
+                              element={
+                                <AdminRoute>
+                                  <CreateOrganization />
+                                </AdminRoute>
+                              } 
+                            />
+                            <Route 
+                              path="/organizations/:id/edit" 
+                              element={
+                                <AdminRoute>
+                                  <EditOrganization />
+                                </AdminRoute>
+                              } 
+                            />
+                            <Route 
+                              path="/organizations" 
+                              element={
+                                <AdminRoute>
+                                  <OrganizationList />
+                                </AdminRoute>
+                              } 
+                            />
+                            <Route 
+                              path="/organizations/:id" 
+                              element={
+                                <AdminRoute>
+                                  <ViewOrganization />
+                                </AdminRoute>
+                              } 
+                            />
+                            <Route 
+                              path="/org-admin" 
+                              element={
+                                <OrgAdminRoute>
+                                  <OrgAdminDashboard />
+                                </OrgAdminRoute>
+                              } 
+                            />
+                            <Route 
+                              path="/org-admin/documents" 
+                              element={
+                                <OrgAdminRoute>
+                                  <DocumentManagement />
+                                </OrgAdminRoute>
+                              } 
+                            />
+                            <Route 
+                              path="/org-admin/employees" 
+                              element={
+                                <OrgAdminRoute>
+                                  <EmployeeManagement />
+                                </OrgAdminRoute>
+                              } 
+                            />
+                            <Route 
+                              path="/org-admin/employees/:id" 
+                              element={
+                                <OrgAdminRoute>
+                                  <ViewEmployee />
+                                </OrgAdminRoute>
+                              } 
+                            />
+                            <Route 
+                              path="/org-admin/employees/:id/edit" 
+                              element={
+                                <OrgAdminRoute>
+                                  <EditEmployee />
+                                </OrgAdminRoute>
+                              } 
+                            />
+                            <Route 
+                              path="/org-admin/collaborators" 
+                              element={
+                                <OrgAdminRoute>
+                                  <CollaboratorManagement />
+                                </OrgAdminRoute>
+                              } 
+                            />
+                            <Route 
+                              path="/org-admin/settings" 
+                              element={
+                                <OrgAdminRoute>
+                                  <OrganizationSettings />
+                                </OrgAdminRoute>
+                              } 
+                            />
+                            <Route 
+                              path="/admin/documents" 
+                              element={
+                                <AdminRoute>
+                                  <AdminDocumentList />
+                                </AdminRoute>
+                              } 
+                            />
+                            <Route 
+                              path="/admin/employees" 
+                              element={
+                                <AdminRoute>
+                                  <AdminEmployeeList />
+                                </AdminRoute>
+                              } 
+                            />
+                            <Route 
+                              path="/admin/collaborators" 
+                              element={
+                                <AdminRoute>
+                                  <AdminCollaboratorList />
+                                </AdminRoute>
+                              } 
+                            />
+                            <Route path="/admin/digital-signature-info" element={<DigitalSignatureInfo />} />
+                          </Routes>
+                        </Layout>
+                      </ProtectedRoute>
+                    }
+                  />
+                </Routes>
+              </Router>
+            </SignatureProvider>
+          </AuthProvider>
+        </div>
+      </SnackbarProvider>
     </ThemeProvider>
   );
 };

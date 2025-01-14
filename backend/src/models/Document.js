@@ -23,6 +23,17 @@ const documentSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User'
   },
+  signatureConfig: [{
+    role: {
+      type: String,
+      enum: ['admin', 'instructor', 'employee'],
+      required: true
+    },
+    order: {
+      type: Number,
+      required: true
+    }
+  }],
   employeeCopies: [{
     employee: {
       type: mongoose.Schema.Types.ObjectId,
@@ -39,7 +50,8 @@ const documentSchema = new mongoose.Schema({
     documentHash: String,
     digitalSignature: String,
     publicKey: String,
-    signatureTimestamp: Date
+    signatureTimestamp: Date,
+    signatureId: String
   }]
 });
 

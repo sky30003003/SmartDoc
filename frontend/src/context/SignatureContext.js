@@ -7,18 +7,22 @@ export const SignatureProvider = ({ children }) => {
   const [verificationResults, setVerificationResults] = useState({});
   const token = localStorage.getItem('token');
 
-  const verifySignature = async (documentId, employeeId) => {
+  const verifySignature = async (documentId, signatureId) => {
     try {
+      console.log('Verifying signature:', { documentId, signatureId });
       const response = await fetch(
-        `${process.env.REACT_APP_API_URL}/api/documents/${documentId}/verify/${employeeId}`,
+        `${process.env.REACT_APP_API_URL}/api/documents/${documentId}/verify/${signatureId}`,
         {
           headers: {
-            'Authorization': `Bearer ${token}`
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json'
           }
         }
       );
       
       const result = await response.json();
+      console.log('Verification result:', result);
+      
       if (!response.ok) {
         throw new Error(result.message || result.error || 'Eroare la verificarea semnăturii');
       }
@@ -33,12 +37,12 @@ export const SignatureProvider = ({ children }) => {
 
       setSignatureStatuses(prev => ({
         ...prev,
-        [`${documentId}_${employeeId}`]: result.isValid
+        [`${documentId}_${signatureId}`]: result.isValid
       }));
 
       setVerificationResults(prev => ({
         ...prev,
-        [`${documentId}_${employeeId}`]: verificationData
+        [`${documentId}_${signatureId}`]: verificationData
       }));
 
       return {
@@ -46,6 +50,7 @@ export const SignatureProvider = ({ children }) => {
         ...verificationData
       };
     } catch (error) {
+      console.error('Verification error:', error);
       const errorData = {
         isValid: false,
         error: error.message,
@@ -54,24 +59,24 @@ export const SignatureProvider = ({ children }) => {
 
       setSignatureStatuses(prev => ({
         ...prev,
-        [`${documentId}_${employeeId}`]: false
+        [`${documentId}_${signatureId}`]: false
       }));
 
       setVerificationResults(prev => ({
         ...prev,
-        [`${documentId}_${employeeId}`]: errorData
+        [`${documentId}_${signatureId}`]: errorData
       }));
 
       throw error;
     }
   };
 
-  const getSignatureStatus = (documentId, employeeId) => {
-    return signatureStatuses[`${documentId}_${employeeId}`];
+  const getSignatureStatus = (documentId, signatureId) => {
+    return signatureStatuses[`${documentId}_${signatureId}`];
   };
 
-  const getVerificationResult = (documentId, employeeId) => {
-    return verificationResults[`${documentId}_${employeeId}`];
+  const getVerificationResult = (documentId, signatureId) => {
+    return verificationResults[`${documentId}_${signatureId}`];
   };
 
   const clearVerificationData = () => {
