@@ -15,6 +15,42 @@ const QRCode = require('qrcode');
 const storage = StorageFactory.getStorageService();
 const upload = multer({ storage: multer.memoryStorage() }).single('file');
 
+/**
+ * Funcție pentru crearea copiilor documentului pentru toți angajații
+ * TODO: Această funcționalitate va fi implementată ulterior într-un endpoint separat
+ * Exemplu de utilizare:
+ * const employeeCopies = await createEmployeeCopies(document, organization);
+ * document.employeeCopies = employeeCopies;
+ * await document.save();
+ */
+const createEmployeeCopies = async (document, organization) => {
+  const employees = await Employee.find({ organization: organization._id });
+  console.log('Found employees:', employees);
+  console.log('Source file path:', document.fileUrl);
+  
+  const employeeCopies = await Promise.all(employees.map(async (employee) => {
+    const employeePath = createEmployeeFolder(
+      organization.name, 
+      `${employee.firstName}_${employee.lastName}`
+    );
+    
+    console.log('Employee folder:', employeePath);
+    
+    const documentPath = await copyDocumentToEmployee(
+      document.fileUrl,
+      employeePath,
+      document.originalName
+    );
+    
+    return {
+      employee: employee._id,
+      path: documentPath
+    };
+  }));
+
+  return employeeCopies;
+};
+
 exports.getAllDocuments = async (req, res) => {
   try {
     const documents = await Document.find({ organization: req.user.organization })
@@ -69,6 +105,30 @@ exports.uploadDocument = async (req, res) => {
     }
 
     try {
+      // Verificăm dacă există deja un document cu același titlu în organizație
+      const existingDocTitle = await Document.findOne({
+        organization: req.user.organization,
+        title: title
+      });
+
+      if (existingDocTitle) {
+        return res.status(400).json({ 
+          message: 'Există deja un document cu acest titlu în organizație' 
+        });
+      }
+
+      // Verificăm dacă există deja un document cu același nume original în organizație
+      const existingDocName = await Document.findOne({
+        organization: req.user.organization,
+        originalName: file.originalname
+      });
+
+      if (existingDocName) {
+        return res.status(400).json({ 
+          message: 'Există deja un document cu acest nume în organizație' 
+        });
+      }
+
       const uploadResult = await storage.uploadFile(file, req.user.organization, organization.name);
       console.log('Upload result:', uploadResult);
 
@@ -96,42 +156,27 @@ exports.uploadDocument = async (req, res) => {
         fileSize: file.size,
         organization: req.user.organization,
         uploadedBy: req.user.userId,
-        signatureConfig: parsedSignatureConfig
+        signatureConfig: parsedSignatureConfig,
+        employeeCopies: [] // Inițializăm array-ul gol pentru copii
       });
 
       await document.save();
-
-      const employees = await Employee.find({ organization: req.user.organization });
-      
-      console.log('Found employees:', employees);
-      console.log('Source file path:', uploadResult.path);
-      
-      const employeeCopies = await Promise.all(employees.map(async (employee) => {
-        const employeePath = createEmployeeFolder(
-          organization.name, 
-          `${employee.firstName}_${employee.lastName}`
-        );
-        
-        console.log('Employee folder:', employeePath);
-        
-        const documentPath = await copyDocumentToEmployee(
-          uploadResult.path,
-          employeePath,
-          file.originalname
-        );
-        
-        return {
-          employee: employee._id,
-          path: documentPath
-        };
-      }));
-
-      document.employeeCopies = employeeCopies;
-      await document.save();
-
       res.status(201).json(document);
     } catch (error) {
       console.error('Error uploading document:', error);
+      // Verificăm dacă eroarea este de tip duplicate key
+      if (error.code === 11000) {
+        if (error.keyPattern.title) {
+          return res.status(400).json({ 
+            message: 'Există deja un document cu acest titlu în organizație' 
+          });
+        }
+        if (error.keyPattern.originalName) {
+          return res.status(400).json({ 
+            message: 'Există deja un document cu acest nume în organizație' 
+          });
+        }
+      }
       res.status(500).json({ message: 'Eroare la încărcarea documentului: ' + error.message });
     }
   });

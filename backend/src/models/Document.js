@@ -6,7 +6,10 @@ const documentSchema = new mongoose.Schema({
     required: true
   },
   description: String,
-  originalName: String,
+  originalName: {
+    type: String,
+    required: true
+  },
   fileUrl: String,
   fileType: String,
   fileSize: Number,
@@ -26,7 +29,7 @@ const documentSchema = new mongoose.Schema({
   signatureConfig: [{
     role: {
       type: String,
-      enum: ['admin', 'instructor', 'employee'],
+      enum: ['admin', 'collaborator', 'employee'],
       required: true
     },
     order: {
@@ -56,5 +59,6 @@ const documentSchema = new mongoose.Schema({
 });
 
 documentSchema.index({ title: 1, organization: 1 }, { unique: true });
+documentSchema.index({ originalName: 1, organization: 1 }, { unique: true });
 
 module.exports = mongoose.model('Document', documentSchema); 
