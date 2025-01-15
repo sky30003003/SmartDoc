@@ -122,27 +122,8 @@ class PDFManipulator {
     const boxWidth = includeQR ? 300 : 200;
     const boxHeight = 100;
     
-    // Împărțim pagina în trei secțiuni egale pe orizontală
-    const sectionWidth = pageWidth / 3;
-    
-    // Calculăm poziția x în funcție de rol
-    let x;
-    switch(signerRole.toLowerCase()) {
-      case 'org_admin':
-        // Administrator - secțiunea din dreapta
-        x = (2 * sectionWidth) + ((sectionWidth - boxWidth) / 2);
-        break;
-      case 'collaborator':
-        // Colaborator - secțiunea din mijloc
-        x = sectionWidth + ((sectionWidth - boxWidth) / 2);
-        break;
-      default:
-        // Angajat - secțiunea din stânga
-        x = (sectionWidth - boxWidth) / 2;
-    }
-
-    // Ne asigurăm că semnătura nu iese din pagină
-    x = Math.max(margin, Math.min(x, pageWidth - boxWidth - margin));
+    // Poziționăm ștampila la marginea din stânga
+    const x = margin;
     const y = Math.max(margin, Math.min(margin, pageHeight - boxHeight - margin));
 
     return {
