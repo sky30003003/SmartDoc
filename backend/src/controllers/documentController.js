@@ -1059,210 +1059,121 @@ exports.bulkDelete = async (req, res) => {
 };
 
 async function handleAdminSignature(document, adminId, printOptions) {
-  try {
-    console.log('=== handleAdminSignature Debug ===');
-    console.log('Document:', {
-      id: document._id,
-      organizationId: document.organizationId,
-      signatureConfig: document.signatureConfig,
-      signatureProgress: document.signatureProgress
-    });
-    console.log('Admin ID:', adminId);
-    console.log('Print Options:', printOptions);
+  console.log('Handling admin signature with options:', {
+    documentId: document._id,
+    adminId,
+    printOptions
+  });
 
-    // Verificăm dacă este rândul administratorului să semneze
-    const currentStep = document.signatureProgress?.currentStep || 0;
-    const adminSignatureConfig = document.signatureConfig.find(config => config.role === 'org_admin');
-    const adminSignatureOrder = adminSignatureConfig?.order || 1;
-    const totalSteps = document.signatureProgress?.totalSteps || document.signatureConfig.length;
-    const completedSignatures = document.signatureProgress?.signatures?.length || 0;
-    const adminAlreadySigned = document.signatureProgress?.signatures?.some(
-      sig => sig.signedBy?.role === 'org_admin'
-    );
+  // Găsim organizația și admin-ul
+  const organization = await Organization.findById(document.organizationId);
+  const admin = await Employee.findById(adminId);
 
-    console.log('Signature verification:', {
-      currentStep,
-      adminSignatureOrder,
-      totalSteps,
-      completedSignatures,
-      adminAlreadySigned
-    });
-
-    if (adminAlreadySigned) {
-      throw new Error('Administratorul a semnat deja acest document');
-    }
-
-    if (currentStep + 1 !== adminSignatureOrder) {
-      throw new Error('Nu este rândul administratorului să semneze');
-    }
-
-    // Găsim organizația și administratorul
-    const organization = await Organization.findById(document.organizationId);
-    console.log('Organization found:', {
-      id: organization._id,
-      name: organization.name
-    });
-
-    const searchCriteria = {
-      _id: adminId,
-      organization: organization._id,
-      role: 'org_admin'
-    };
-    console.log('Searching for admin with criteria:', searchCriteria);
-
-    const admin = await Employee.findOne(searchCriteria);
-    if (!admin) {
-      throw new Error('Administratorul nu a fost găsit');
-    }
-    console.log('Admin found:', admin);
-
-    // Inițializăm serviciul de semnare
-    console.log('Initializing PAdES service with options:', {
-      validityYears: organization.certificateSettings?.validityYears || 5,
-      visualSignature: printOptions.printDigitalSignature,
-      includeQR: printOptions.includeQRCode,
-      rawPrintOptions: printOptions
-    });
-
-    const signingService = new PAdESService({
-      basePath: path.join(__dirname, '../secure_storage'),
-      validityYears: organization.certificateSettings?.validityYears || 5,
-      visualSignature: printOptions.printDigitalSignature,
-      includeQR: printOptions.includeQRCode
-    });
-    await signingService.initialize();
-
-    // Pregătim informațiile pentru semnătură
-    const signatureTimestamp = new Date().toISOString();
-    const signatureId = `sig-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-    const signatureInfo = {
-      signatureId,
-      signerName: `${admin.firstName} ${admin.lastName} (Administrator)`,
-      signerEmail: admin.email,
-      organization: organization.name,
-      timestamp: signatureTimestamp,
-      documentHash: '',
-      signatureType: 'PAdES-Basic'
-    };
-
-    console.log('Document path check:', {
-      path: document.path,
-      exists: fs.existsSync(document.path)
-    });
-
-    // Citim documentul PDF
-    if (!document.path) {
-      throw new Error('Calea documentului nu este setată');
-    }
-
-    if (!fs.existsSync(document.path)) {
-      // Încercăm să găsim documentul în directorul de stocare
-      const safeOrgName = organization.name.replace(/[^a-z0-9]/gi, '_').toLowerCase();
-      const storageDir = path.join(__dirname, '../storage');
-      const filePath = path.join(storageDir, safeOrgName, path.basename(document.path));
-
-      console.log('Trying alternative path:', {
-        originalPath: document.path,
-        newPath: filePath,
-        exists: fs.existsSync(filePath)
-      });
-
-      if (!fs.existsSync(filePath)) {
-        throw new Error(`Documentul nu există la nicio cale specificată: ${document.path} sau ${filePath}`);
-      }
-
-      // Actualizăm calea documentului
-      document.path = filePath;
-      await document.save();
-    }
-
-    const pdfBuffer = await fsPromises.readFile(document.path);
-
-    // Semnăm documentul
-    const safeOrgName = organization.name.replace(/[^a-z0-9]/gi, '_').toLowerCase();
-    const storageDir = path.join(__dirname, '../storage');
-    const signedDocPath = document.path; // Folosim aceeași cale ca documentul original
-    
-    console.log('Signing document with buffer:', {
-      bufferSize: pdfBuffer.length,
-      signatureInfo,
-      printOptions
-    });
-    
-    const result = await signingService.signDocument(pdfBuffer, {
-      id: admin._id,
-      firstName: admin.firstName,
-      lastName: admin.lastName,
-      email: admin.email,
-      organization: organization.name,
-      role: 'org_admin'
-    }, {
-      title: document.title,
-      signatureId,
-      printDigitalSignature: printOptions.printDigitalSignature,
-      includeQRCode: printOptions.includeQRCode
-    });
-
-    console.log('Document signed successfully:', {
-      resultSize: result.pdfBytes.length,
-      documentHash: result.documentHash
-    });
-
-    // Suprascrie documentul original cu versiunea semnată
-    await fsPromises.writeFile(signedDocPath, result.pdfBytes);
-
-    // Actualizăm progresul semnăturilor
-    document.signatureProgress.signatures.push({
-      signatureInfo: {
-        ...signatureInfo,
-        documentHash: result.documentHash
-      },
-      signedBy: {
-        id: admin._id,
-        name: `${admin.firstName} ${admin.lastName}`,
-        email: admin.email,
-        role: admin.role,
-        organization: organization.name
-      },
-      signedAt: signatureTimestamp
-    });
-
-    document.signatureProgress.currentStep++;
-    document.path = signedDocPath;
-
-    if (document.signatureProgress.currentStep >= document.signatureProgress.totalSteps) {
-      document.status = 'completed';
-    } else {
-      document.status = 'in_progress';
-    }
-
-    await document.save();
-    return document;
-
-  } catch (error) {
-    console.error('Error in handleAdminSignature:', error);
-    throw error;
+  if (!organization || !admin) {
+    throw new Error('Organizația sau admin-ul nu au fost găsite');
   }
+
+  // Inițializăm serviciul de semnare cu setările din organizație
+  const signingService = new PAdESService({
+    basePath: process.env.STORAGE_PATH,
+    validityYears: organization.certificateSettings?.validityYears || 5,
+    visualSignature: printOptions.printDigitalSignature,
+    includeQR: printOptions.includeQRCode
+  });
+
+  console.log('Initialized PAdES service with options:', {
+    validityYears: organization.certificateSettings?.validityYears || 5,
+    visualSignature: printOptions.printDigitalSignature,
+    includeQR: printOptions.includeQRCode,
+    rawPrintOptions: printOptions
+  });
+
+  await signingService.initialize();
+
+  // Pregătim informațiile pentru semnătură
+  const signatureTimestamp = new Date().toISOString();
+  const signatureId = `sig-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+  const signatureInfo = {
+    signatureId,
+    signerName: `${admin.firstName} ${admin.lastName} (Administrator)`,
+    signerEmail: admin.email,
+    organization: organization.name,
+    timestamp: signatureTimestamp,
+    documentHash: '',
+    signatureType: 'PAdES-Basic'
+  };
+
+  // Verificăm existența documentului
+  if (!document.path || !fs.existsSync(document.path)) {
+    throw new Error('Documentul nu există la calea specificată');
+  }
+
+  // Citim documentul PDF
+  const pdfBuffer = await fsPromises.readFile(document.path);
+  console.log('Read PDF buffer:', { size: pdfBuffer.length });
+
+  // Semnăm documentul
+  const result = await signingService.signDocument(pdfBuffer, {
+    id: admin._id,
+    firstName: admin.firstName,
+    lastName: admin.lastName,
+    email: admin.email,
+    organization: organization.name,
+    role: 'org_admin'
+  }, {
+    title: document.title,
+    signatureId,
+    printDigitalSignature: printOptions.printDigitalSignature,
+    includeQRCode: printOptions.includeQRCode
+  });
+
+  console.log('Document signed successfully:', {
+    resultSize: result.pdfBytes.length,
+    documentHash: result.documentHash
+  });
+
+  // Suprascrie documentul original cu versiunea semnată
+  await fsPromises.writeFile(document.path, result.pdfBytes);
+
+  // Actualizăm progresul semnăturilor
+  document.signatureProgress.signatures.push({
+    signatureInfo: {
+      ...signatureInfo,
+      documentHash: result.documentHash
+    },
+    signedBy: {
+      id: admin._id,
+      name: `${admin.firstName} ${admin.lastName}`,
+      email: admin.email,
+      role: admin.role,
+      organization: organization.name
+    },
+    signedAt: signatureTimestamp
+  });
+
+  document.signatureProgress.currentStep++;
+
+  if (document.signatureProgress.currentStep >= document.signatureProgress.totalSteps) {
+    document.status = 'completed';
+  } else {
+    document.status = 'in_progress';
+  }
+
+  await document.save();
+  return document;
 }
 
 exports.signDocumentAsAdmin = async (req, res) => {
   try {
+    const { id: documentId } = req.params;
+    
     console.log('=== signDocumentAsAdmin Debug ===');
     console.log('User:', {
       id: req.user.userId,
       role: req.user.role,
       organization: req.user.organization
     });
-    console.log('Document ID:', req.params.id);
-    console.log('Print Options:', req.body.printOptions);
-
-    const { id: documentId } = req.params;
-    const { printOptions } = req.body;
-
-    console.log('Print options received:', {
-      printOptions,
-      rawBody: req.body
-    });
+    console.log('Document ID:', documentId);
 
     // Verificăm dacă utilizatorul este administrator
     if (req.user.role !== 'org_admin') {
@@ -1287,8 +1198,22 @@ exports.signDocumentAsAdmin = async (req, res) => {
       organizationId: document.organizationId
     });
 
+    // Găsim organizația
+    const organization = await Organization.findById(req.user.organization);
+    if (!organization) {
+      return res.status(404).json({ message: 'Organizația nu a fost găsită' });
+    }
+
+    // Folosim setările din organizație pentru semnătură
+    const signatureSettings = {
+      printDigitalSignature: organization.signatureSettings?.printSignature || false,
+      includeQRCode: organization.signatureSettings?.includeQRCode || false
+    };
+
+    console.log('Using organization signature settings:', signatureSettings);
+
     // Procesăm semnătura administratorului
-    const signedDocument = await handleAdminSignature(document, req.user.userId, printOptions);
+    const signedDocument = await handleAdminSignature(document, req.user.userId, signatureSettings);
 
     // Calculăm progresul semnăturilor
     const signatureProgress = signedDocument.getSignatureProgress();

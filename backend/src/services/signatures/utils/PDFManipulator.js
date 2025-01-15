@@ -51,7 +51,11 @@ class PDFManipulator {
       if (!pdfDoc) throw new Error('Document PDF invalid');
       if (!signatureInfo) throw new Error('Informații semnătură invalide');
       
-      console.log('Adding visual signature for role:', signatureInfo.signerRole);
+      console.log('=== PDFManipulator Debug ===');
+      console.log('Raw signature info received:', signatureInfo);
+      console.log('includeQR value:', signatureInfo.includeQR);
+      console.log('includeQR type:', typeof signatureInfo.includeQR);
+      console.log('includeQR strict check:', signatureInfo.includeQR === true);
       
       const pages = pdfDoc.getPages();
       const targetPage = position.page >= 0 && position.page < pages.length 
@@ -70,19 +74,27 @@ class PDFManipulator {
         signatureId: signatureInfo.signatureId || 'ID necunoscut',
         documentHash: signatureInfo.documentHash || '',
         signerRole: signatureInfo.signerRole || 'employee',
-        includeQR: !!signatureInfo.includeQR
+        includeQR: signatureInfo.includeQR // Păstrăm valoarea exactă
       };
+
+      console.log('=== After Normalization ===');
+      console.log('Normalized includeQR value:', normalizedSignatureInfo.includeQR);
+      console.log('Normalized includeQR type:', typeof normalizedSignatureInfo.includeQR);
+      console.log('Normalized includeQR strict check:', normalizedSignatureInfo.includeQR === true);
 
       // Calculăm dimensiunile pentru semnătura vizuală folosind rolul semnatorului
       const signatureBox = this._calculateSignatureBox(
         width,
         height,
         position,
-        normalizedSignatureInfo.includeQR,
+        normalizedSignatureInfo.includeQR === true, // Verificare strictă pentru dimensiuni
         normalizedSignatureInfo.signerRole
       );
 
-      console.log('Calculated signature box:', signatureBox);
+      console.log('=== Before QR Code Check ===');
+      console.log('Final includeQR check value:', signatureInfo.includeQR);
+      console.log('Final includeQR check type:', typeof signatureInfo.includeQR);
+      console.log('Final includeQR strict comparison:', signatureInfo.includeQR === true);
 
       // Adăugăm fundalul și bordul semnăturii
       this._drawSignatureBackground(targetPage, signatureBox);
@@ -95,14 +107,17 @@ class PDFManipulator {
         normalizedSignatureInfo
       );
 
-      // Adăugăm QR code dacă este configurat
-      if (normalizedSignatureInfo.includeQR) {
+      // Verificăm strict dacă includeQR este true
+      if (signatureInfo.includeQR === true) {
+        console.log('QR code check passed, adding QR code to signature');
         await this._addQRCode(
           pdfDoc,
           targetPage,
           signatureBox,
           normalizedSignatureInfo
         );
+      } else {
+        console.log('QR code check failed, skipping QR code. Value:', signatureInfo.includeQR);
       }
 
       return signatureBox;
@@ -119,12 +134,23 @@ class PDFManipulator {
     }
 
     const margin = 20;
-    const boxWidth = includeQR ? 300 : 200;
+    // Ajustăm lățimea semnăturii în funcție de prezența QR code-ului
+    const boxWidth = includeQR === true ? 300 : 200;
     const boxHeight = 100;
     
     // Poziționăm ștampila la marginea din stânga
     const x = margin;
     const y = Math.max(margin, Math.min(margin, pageHeight - boxHeight - margin));
+
+    console.log('Calculated signature box with dimensions:', {
+      x,
+      y,
+      width: boxWidth,
+      height: boxHeight,
+      margin,
+      includeQR,
+      signerRole
+    });
 
     return {
       x,
@@ -193,9 +219,9 @@ class PDFManipulator {
       `ID Semnatura: ${signatureId}`
     ];
 
-    for (const line of textLines) {
+    textLines.forEach((line) => {
       page.drawText(line, {
-        x: box.x + box.margin,
+        x: box.x,
         y: currentY,
         size: fontSize,
         font: font,
@@ -203,7 +229,7 @@ class PDFManipulator {
         opacity: 0.8
       });
       currentY -= lineHeight;
-    }
+    });
   }
 
   async _addQRCode(pdfDoc, page, box, signatureInfo) {
@@ -336,33 +362,7 @@ class PDFManipulator {
     // Altfel, încercăm să convertim la string
     return String(value);
   }
-
-  /**
-   * Salvează documentul PDF
-   * @param {PDFDocument} pdfDoc - Documentul PDF
-   * @returns {Promise<Buffer>} Buffer-ul documentului PDF
-   */
-  async savePDF(pdfDoc) {
-    try {
-      // Ne asigurăm că toate obiectele sunt actualizate
-      await pdfDoc.flush();
-      
-      // Salvăm documentul cu opțiuni consistente
-      const pdfBytes = await pdfDoc.save(PDF_SAVE_OPTIONS);
-      
-      // Convertim la Buffer și verificăm rezultatul
-      const buffer = Buffer.from(pdfBytes);
-      if (!buffer || buffer.length === 0) {
-        throw new Error('PDF-ul generat este gol');
-      }
-      
-      console.log('PDF saved successfully, size:', buffer.length);
-      return buffer;
-    } catch (error) {
-      console.error('Detalii eroare salvare PDF:', error);
-      throw new Error(`Eroare la salvarea PDF-ului: ${error.message}`);
-    }
-  }
 }
 
-module.exports = PDFManipulator; 
+// Exportăm clasa pentru a putea fi folosită în alte module
+module.exports = PDFManipulator;

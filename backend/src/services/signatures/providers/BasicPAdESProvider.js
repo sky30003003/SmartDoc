@@ -104,7 +104,12 @@ class BasicPAdESProvider {
 
       // Adăugăm semnătura vizuală dacă este configurată
       if (options.printDigitalSignature) {
-        console.log('Adding visual signature with options:', options);
+        console.log('=== Visual Signature Options Debug ===');
+        console.log('Raw options received:', options);
+        console.log('includeQRCode value:', options.includeQRCode);
+        console.log('includeQRCode type:', typeof options.includeQRCode);
+        console.log('includeQRCode strict check:', options.includeQRCode === true);
+        
         await this.manipulator.addVisualSignature(pdfDoc, {
           signerName: `${signatureInfo.firstName} ${signatureInfo.lastName}`,
           signerEmail: signatureInfo.email,
@@ -113,7 +118,7 @@ class BasicPAdESProvider {
           signatureId: options.signatureId,
           documentHash: documentHash,
           signerRole: signatureInfo.role || 'employee',
-          includeQR: options.includeQRCode
+          includeQR: options.includeQRCode === true
         }, {
           page: -1
         });
