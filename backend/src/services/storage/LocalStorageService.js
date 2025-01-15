@@ -15,9 +15,8 @@ class LocalStorageService {
       const orgDir = path.join(this.baseDir, safeOrgName);
       await fs.mkdir(orgDir, { recursive: true });
 
-      // Generăm un nume unic pentru fișier
-      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-      const fileName = `${path.parse(file.originalname).name}_${timestamp}.pdf`;
+      // Folosim numele original al fișierului
+      const fileName = file.originalname;
       
       // Calea completă unde va fi salvat fișierul
       const filePath = path.join(orgDir, fileName);

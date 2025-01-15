@@ -225,7 +225,7 @@ const SignatureStatusDialog = ({ open, onClose, document, onVerifyClick, onViewD
                           <IconButton
                             color="primary"
                             size="small"
-                            onClick={() => onViewDocument(document, signature)}
+                            onClick={() => onViewDocument(document)}
                           >
                             <Visibility />
                           </IconButton>

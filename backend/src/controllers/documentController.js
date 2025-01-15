@@ -293,10 +293,23 @@ exports.deleteDocument = async (req, res) => {
 
 exports.downloadDocument = async (req, res) => {
   try {
+    console.log('=== Download Document Debug ===');
+    console.log('Document ID:', req.params.id);
+    console.log('User:', {
+      id: req.user.userId,
+      organization: req.user.organization
+    });
+
     const document = await Document.findOne({
       _id: req.params.id,
       organizationId: req.user.organization
     });
+
+    console.log('Document found:', document ? {
+      id: document._id,
+      path: document.path,
+      exists: document.path ? fs.existsSync(document.path) : false
+    } : 'No document found');
 
     if (!document) {
       return res.status(404).json({ message: 'Documentul nu a fost găsit' });
@@ -307,17 +320,49 @@ exports.downloadDocument = async (req, res) => {
       return res.status(404).json({ message: 'Organizația nu a fost găsită' });
     }
 
-    const safeOrgName = organization.name.replace(/[^a-z0-9]/gi, '_').toLowerCase();
-    const storageDir = path.join(__dirname, '../storage');
-    const filePath = path.join(storageDir, safeOrgName, document.fileUrl.split('/').pop());
-
-    const fs = require('fs');
-    if (!fs.existsSync(filePath)) {
-      console.error('File not found:', filePath);
-      return res.status(404).json({ message: 'Fișierul nu a fost găsit' });
+    if (!document.path) {
+      console.error('Document path is missing');
+      return res.status(404).json({ message: 'Calea documentului nu este setată' });
     }
 
-    res.download(filePath, document.originalName);
+    if (!fs.existsSync(document.path)) {
+      console.error('File not found at path:', document.path);
+      
+      // Încercăm să găsim documentul în directorul de stocare
+      const safeOrgName = organization.name.replace(/[^a-z0-9]/gi, '_').toLowerCase();
+      const storageDir = path.join(__dirname, '../storage');
+      const alternativePath = path.join(storageDir, safeOrgName, path.basename(document.path));
+      
+      console.log('Trying alternative path:', {
+        originalPath: document.path,
+        alternativePath,
+        exists: fs.existsSync(alternativePath)
+      });
+
+      if (!fs.existsSync(alternativePath)) {
+        return res.status(404).json({ message: 'Fișierul nu a fost găsit' });
+      }
+
+      // Actualizăm calea documentului în baza de date
+      document.path = alternativePath;
+      await document.save();
+    }
+
+    // Setăm header-urile pentru PDF
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `inline; filename="${document.originalName}"`);
+    res.setHeader('Cache-Control', 'no-cache');
+    
+    // Trimitem fișierul
+    const absolutePath = path.resolve(document.path);
+    console.log('Sending file from path:', absolutePath);
+    
+    res.sendFile(absolutePath, (err) => {
+      if (err) {
+        console.error('Error sending file:', err);
+        res.status(500).json({ message: 'Eroare la trimiterea fișierului' });
+      }
+    });
   } catch (error) {
     console.error('Error downloading document:', error);
     res.status(500).json({ message: 'Eroare la descărcarea documentului' });
@@ -1113,9 +1158,7 @@ async function handleAdminSignature(document, adminId, printOptions) {
     // Semnăm documentul
     const safeOrgName = organization.name.replace(/[^a-z0-9]/gi, '_').toLowerCase();
     const storageDir = path.join(__dirname, '../storage');
-    const fileTimestamp = new Date().toISOString().replace(/[:.]/g, '-');
-    const signedFileName = `${path.parse(document.originalName).name}_signed_${fileTimestamp}.pdf`;
-    const signedDocPath = path.join(storageDir, safeOrgName, signedFileName);
+    const signedDocPath = document.path; // Folosim aceeași cale ca documentul original
     
     console.log('Signing document with buffer:', {
       bufferSize: pdfBuffer.length,
@@ -1133,10 +1176,7 @@ async function handleAdminSignature(document, adminId, printOptions) {
       documentHash: result.documentHash
     });
 
-    // Creăm directorul organizației dacă nu există
-    await fsPromises.mkdir(path.dirname(signedDocPath), { recursive: true });
-
-    // Salvăm documentul semnat
+    // Suprascrie documentul original cu versiunea semnată
     await fsPromises.writeFile(signedDocPath, result.pdfBytes);
 
     // Actualizăm progresul semnăturilor
