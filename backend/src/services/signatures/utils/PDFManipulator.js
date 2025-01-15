@@ -42,163 +42,220 @@ class PDFManipulator {
    * Adaugă o semnătură vizuală la document
    * @param {PDFDocument} pdfDoc - Documentul PDF
    * @param {Object} signatureInfo - Informații despre semnătură
-   * @param {Object} options - Opțiuni pentru semnătura vizuală
+   * @param {Object} position - Poziția semnăturii
    * @returns {Promise<Object>} Dimensiunile și poziția semnăturii
    */
-  async addVisualSignature(pdfDoc, signatureInfo, options = {}) {
+  async addVisualSignature(pdfDoc, signatureInfo, position) {
     try {
-      const {
-        page = 0,
-        x = 50,
-        y = 50,
-        width = 200,
-        height = 100,
-        includeQR = true
-      } = options;
+      // Validăm parametrii de intrare
+      if (!pdfDoc) throw new Error('Document PDF invalid');
+      if (!signatureInfo) throw new Error('Informații semnătură invalide');
+      
+      console.log('Adding visual signature for role:', signatureInfo.signerRole);
+      
+      const pages = pdfDoc.getPages();
+      const targetPage = position.page >= 0 && position.page < pages.length 
+        ? pages[position.page] 
+        : pages[pages.length - 1];
 
-      const pdfPage = pdfDoc.getPages()[page];
-      if (!pdfPage) {
-        throw new Error('Pagina specificată nu există în document');
-      }
+      const { width, height } = targetPage.getSize();
+      const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
 
-      // Calculăm dimensiunile semnăturii
-      const signatureBox = await this._calculateSignatureBox(pdfDoc, signatureInfo, {
+      // Normalizăm informațiile semnăturii pentru a evita undefined
+      const normalizedSignatureInfo = {
+        signerName: signatureInfo.signerName || 'Semnatar necunoscut',
+        signerEmail: signatureInfo.signerEmail || 'Email necunoscut',
+        organization: signatureInfo.organization || 'Organizație necunoscută',
+        signedAt: signatureInfo.signedAt || new Date().toISOString(),
+        signatureId: signatureInfo.signatureId || 'ID necunoscut',
+        documentHash: signatureInfo.documentHash || '',
+        signerRole: signatureInfo.signerRole || 'employee',
+        includeQR: !!signatureInfo.includeQR
+      };
+
+      // Calculăm dimensiunile pentru semnătura vizuală folosind rolul semnatorului
+      const signatureBox = this._calculateSignatureBox(
         width,
         height,
-        includeQR
-      });
+        position,
+        normalizedSignatureInfo.includeQR,
+        normalizedSignatureInfo.signerRole
+      );
 
-      // Desenăm fundalul semnăturii
-      await this._drawSignatureBackground(pdfPage, x, y, signatureBox.width, signatureBox.height);
+      console.log('Calculated signature box:', signatureBox);
+
+      // Adăugăm fundalul și bordul semnăturii
+      this._drawSignatureBackground(targetPage, signatureBox);
 
       // Adăugăm textul semnăturii
-      await this._addSignatureText(pdfPage, signatureInfo, {
-        x,
-        y,
-        width: signatureBox.width,
-        height: signatureBox.height
-      });
+      await this._addSignatureText(
+        targetPage,
+        font,
+        signatureBox,
+        normalizedSignatureInfo
+      );
 
-      // Adăugăm codul QR dacă este solicitat
-      if (includeQR) {
-        await this._addSignatureQR(pdfPage, signatureInfo, {
-          x: x + signatureBox.width - 80,
-          y: y + 10,
-          size: 70
-        });
+      // Adăugăm QR code dacă este configurat
+      if (normalizedSignatureInfo.includeQR) {
+        await this._addQRCode(
+          pdfDoc,
+          targetPage,
+          signatureBox,
+          normalizedSignatureInfo
+        );
       }
 
-      return {
-        page,
-        x,
-        y,
-        width: signatureBox.width,
-        height: signatureBox.height
-      };
+      return signatureBox;
     } catch (error) {
+      console.error('Error adding visual signature:', error);
       throw new Error(`Eroare la adăugarea semnăturii vizuale: ${error.message}`);
     }
   }
 
-  /**
-   * Calculează dimensiunile necesare pentru semnătura vizuală
-   * @private
-   */
-  async _calculateSignatureBox(pdfDoc, signatureInfo, options) {
-    const { width = 200, height = 100, includeQR = true } = options;
-    
-    // Ajustăm lățimea în funcție de prezența codului QR
-    const finalWidth = includeQR ? width : width - 80;
-    
-    return {
-      width: finalWidth,
-      height: height
-    };
-  }
+  _calculateSignatureBox(pageWidth, pageHeight, position, includeQR, signerRole = 'employee') {
+    // Validăm parametrii de intrare
+    if (!pageWidth || !pageHeight) {
+      throw new Error('Dimensiunile paginii sunt invalide');
+    }
 
-  /**
-   * Desenează fundalul semnăturii
-   * @private
-   */
-  async _drawSignatureBackground(page, x, y, width, height) {
-    // Desenăm un dreptunghi semi-transparent pentru fundal
-    page.drawRectangle({
+    const margin = 20;
+    const boxWidth = includeQR ? 300 : 200;
+    const boxHeight = 100;
+    
+    // Împărțim pagina în trei secțiuni egale pe orizontală
+    const sectionWidth = pageWidth / 3;
+    
+    // Calculăm poziția x în funcție de rol
+    let x;
+    switch(signerRole.toLowerCase()) {
+      case 'org_admin':
+        // Administrator - secțiunea din dreapta
+        x = (2 * sectionWidth) + ((sectionWidth - boxWidth) / 2);
+        break;
+      case 'collaborator':
+        // Colaborator - secțiunea din mijloc
+        x = sectionWidth + ((sectionWidth - boxWidth) / 2);
+        break;
+      default:
+        // Angajat - secțiunea din stânga
+        x = (sectionWidth - boxWidth) / 2;
+    }
+
+    // Ne asigurăm că semnătura nu iese din pagină
+    x = Math.max(margin, Math.min(x, pageWidth - boxWidth - margin));
+    const y = Math.max(margin, Math.min(margin, pageHeight - boxHeight - margin));
+
+    return {
       x,
       y,
-      width,
-      height,
-      color: rgb(0.95, 0.95, 0.95),
-      opacity: 0.8,
-      borderColor: rgb(0.8, 0.8, 0.8),
-      borderWidth: 1
+      width: boxWidth,
+      height: boxHeight,
+      margin
+    };
+  }
+
+  _drawSignatureBackground(page, box) {
+    // Fundal alb semi-transparent
+    page.drawRectangle({
+      x: box.x,
+      y: box.y,
+      width: box.width,
+      height: box.height,
+      color: rgb(1, 1, 1),
+      opacity: 0.1
+    });
+
+    // Border albastru
+    page.drawRectangle({
+      x: box.x,
+      y: box.y,
+      width: box.width,
+      height: box.height,
+      borderColor: rgb(0.1, 0.4, 0.8),
+      borderWidth: 1,
+      opacity: 0.8
     });
   }
 
-  /**
-   * Adaugă textul semnăturii
-   * @private
-   */
-  async _addSignatureText(page, signatureInfo, position) {
-    const font = await page.doc.embedFont(StandardFonts.TimesRoman);
-    const fontSize = 10;
+  async _addSignatureText(page, font, box, signatureInfo) {
+    const fontSize = 8;
+    const lineHeight = fontSize * 1.5;
+    let currentY = box.y + box.height - box.margin;
 
-    // Eliminăm diacriticele din text pentru siguranță
-    const normalizeText = (text) => {
-      return text.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+    // Convertim textele cu diacritice la versiunea fără diacritice
+    const removeDiacritics = (str) => {
+      if (!str) return '';
+      return str.normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+        .replace(/[ăâ]/g, 'a')
+        .replace(/[îí]/g, 'i')
+        .replace(/[șş]/g, 's')
+        .replace(/[țţ]/g, 't')
+        .replace(/[Ăâ]/g, 'A')
+        .replace(/[Îí]/g, 'I')
+        .replace(/[Șş]/g, 'S')
+        .replace(/[Țţ]/g, 'T');
     };
 
+    // Construim textele cu verificări pentru undefined
+    const signerName = signatureInfo.signerName || 'Semnatar necunoscut';
+    const signerEmail = signatureInfo.signerEmail || 'Email necunoscut';
+    const organization = signatureInfo.organization || 'Organizație necunoscută';
+    const signedAt = signatureInfo.signedAt ? new Date(signatureInfo.signedAt).toLocaleString('en-US') : 'Data necunoscută';
+    const signatureId = signatureInfo.signatureId || 'ID necunoscut';
+
     const textLines = [
-      `Semnat digital de: ${normalizeText(signatureInfo.signerName)}`,
-      `Email: ${signatureInfo.signerEmail}`,
-      `Organizatie: ${normalizeText(signatureInfo.organization)}`,
-      `Data: ${new Date(signatureInfo.signedAt || Date.now()).toLocaleString('ro-RO')}`,
-      `ID: ${signatureInfo.signatureId}`
+      'Semnat digital de:',
+      removeDiacritics(signerName),
+      `Email: ${signerEmail}`,
+      `Organizatie: ${removeDiacritics(organization)}`,
+      `Data: ${signedAt}`,
+      `ID Semnatura: ${signatureId}`
     ];
 
-    let currentY = position.y + position.height - 20;
-    const lineHeight = fontSize * 1.2;
-
-    textLines.forEach(line => {
+    for (const line of textLines) {
       page.drawText(line, {
-        x: position.x + 10,
+        x: box.x + box.margin,
         y: currentY,
         size: fontSize,
-        font,
-        color: rgb(0, 0, 0)
+        font: font,
+        color: rgb(0, 0, 0),
+        opacity: 0.8
       });
       currentY -= lineHeight;
-    });
+    }
   }
 
-  /**
-   * Adaugă codul QR pentru validare
-   * @private
-   */
-  async _addSignatureQR(page, signatureInfo, position) {
+  async _addQRCode(pdfDoc, page, box, signatureInfo) {
     try {
-      // Generăm URL-ul de validare
-      const validationUrl = `${process.env.REACT_APP_URL}/verify/${signatureInfo.documentHash}/${signatureInfo.signatureId}`;
+      if (!process.env.FRONTEND_URL) {
+        console.warn('FRONTEND_URL nu este setat. Se folosește URL-ul implicit pentru verificare.');
+      }
+
+      const qrSize = 80;
+      const baseUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+      const verificationUrl = `${baseUrl}/verify/${signatureInfo.documentHash || ''}/${signatureInfo.signatureId || ''}`;
       
-      // Generăm codul QR
-      const qrBuffer = await QRCode.toBuffer(validationUrl, {
-        errorCorrectionLevel: 'M',
+      const qrDataUrl = await QRCode.toDataURL(verificationUrl, {
+        errorCorrectionLevel: 'H',
         margin: 1,
-        width: position.size
+        width: qrSize
       });
 
-      // Convertim codul QR în format PNG pentru PDF
-      const qrImage = await page.doc.embedPng(qrBuffer);
+      const qrImageBytes = qrDataUrl.split(',')[1];
+      const qrImage = await pdfDoc.embedPng(Buffer.from(qrImageBytes, 'base64'));
 
-      // Desenăm codul QR
+      const qrX = box.x + box.width - qrSize - box.margin;
+      const qrY = box.y + (box.height - qrSize) / 2;
+
       page.drawImage(qrImage, {
-        x: position.x,
-        y: position.y,
-        width: position.size,
-        height: position.size
+        x: qrX,
+        y: qrY,
+        width: qrSize,
+        height: qrSize
       });
     } catch (error) {
-      console.error('Eroare la generarea codului QR:', error);
-      // Continuăm fără cod QR în caz de eroare
+      console.error('Error adding QR code:', error);
+      throw new Error(`Eroare la adăugarea codului QR: ${error.message}`);
     }
   }
 

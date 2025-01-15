@@ -209,14 +209,6 @@ exports.uploadDocument = async (req, res) => {
 
       await document.save();
 
-      // Dacă există configurație de semnături, trimitem notificări către admin
-      if (parsedSignatureConfig.length > 0) {
-        const adminSigners = parsedSignatureConfig.filter(config => config.role === 'org_admin' && config.order === 1);
-        if (adminSigners.length > 0) {
-          await notifyNextSigner(document);
-        }
-      }
-
       res.status(201).json(document);
     } catch (error) {
       console.error('Error uploading document:', error);
@@ -405,7 +397,6 @@ exports.sendToSign = async (req, res) => {
     // Verificăm dacă documentul nu a fost deja semnat
     const hasSignatures = document.signatureProgress?.signatures?.length > 0;
     const isFullySigned = document.isFullySigned();
-    
     console.log('Document signature state:', {
       hasSignatures,
       isFullySigned,
@@ -435,6 +426,30 @@ exports.sendToSign = async (req, res) => {
 
     if (!admin) {
       return res.status(404).json({ message: 'Nu s-a găsit administratorul organizației' });
+    }
+
+    // Verificăm cazul special: admin este primul în secvență și este autentificat
+    const isAdminFirstSigner = adminConfig.order === 1;
+    const isAdminLoggedIn = req.user.role === 'org_admin';
+    
+    console.log('Special case check:', {
+      isAdminFirstSigner,
+      isAdminLoggedIn,
+      userRole: req.user.role,
+      adminConfigOrder: adminConfig.order
+    });
+
+    // Dacă admin-ul este primul în secvență și este autentificat, nu mai trimitem email
+    if (isAdminFirstSigner && isAdminLoggedIn) {
+      return res.json({ 
+        message: 'Puteți semna documentul direct din interfață',
+        canSignDirectly: true,
+        documentStatus: {
+          canBeSentForSignature: false,
+          hasSignatures,
+          isFullySigned
+        }
+      });
     }
 
     // Configurăm transportul de email
@@ -1102,6 +1117,13 @@ async function handleAdminSignature(document, adminId, printOptions) {
     console.log('Admin found:', admin);
 
     // Inițializăm serviciul de semnare
+    console.log('Initializing PAdES service with options:', {
+      validityYears: organization.certificateSettings?.validityYears || 5,
+      visualSignature: printOptions.printDigitalSignature,
+      includeQR: printOptions.includeQRCode,
+      rawPrintOptions: printOptions
+    });
+
     const signingService = new PAdESService({
       basePath: path.join(__dirname, '../secure_storage'),
       validityYears: organization.certificateSettings?.validityYears || 5,
@@ -1112,8 +1134,9 @@ async function handleAdminSignature(document, adminId, printOptions) {
 
     // Pregătim informațiile pentru semnătură
     const signatureTimestamp = new Date().toISOString();
+    const signatureId = `sig-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
     const signatureInfo = {
-      signatureId: `sig-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+      signatureId,
       signerName: `${admin.firstName} ${admin.lastName} (Administrator)`,
       signerEmail: admin.email,
       organization: organization.name,
@@ -1166,7 +1189,16 @@ async function handleAdminSignature(document, adminId, printOptions) {
       printOptions
     });
     
-    const result = await signingService.signDocument(pdfBuffer, signatureInfo, {
+    const result = await signingService.signDocument(pdfBuffer, {
+      id: admin._id,
+      firstName: admin.firstName,
+      lastName: admin.lastName,
+      email: admin.email,
+      organization: organization.name,
+      role: 'org_admin'
+    }, {
+      title: document.title,
+      signatureId,
       printDigitalSignature: printOptions.printDigitalSignature,
       includeQRCode: printOptions.includeQRCode
     });
@@ -1226,6 +1258,11 @@ exports.signDocumentAsAdmin = async (req, res) => {
 
     const { id: documentId } = req.params;
     const { printOptions } = req.body;
+
+    console.log('Print options received:', {
+      printOptions,
+      rawBody: req.body
+    });
 
     // Verificăm dacă utilizatorul este administrator
     if (req.user.role !== 'org_admin') {

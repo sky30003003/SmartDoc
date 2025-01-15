@@ -102,6 +102,23 @@ class BasicPAdESProvider {
       const documentHash = await this.calculateDocumentHash(pdfBuffer);
       console.log('Original document hash:', documentHash);
 
+      // Adăugăm semnătura vizuală dacă este configurată
+      if (options.printDigitalSignature) {
+        console.log('Adding visual signature with options:', options);
+        await this.manipulator.addVisualSignature(pdfDoc, {
+          signerName: `${signatureInfo.firstName} ${signatureInfo.lastName}`,
+          signerEmail: signatureInfo.email,
+          organization: signatureInfo.organization,
+          signedAt: new Date().toISOString(),
+          signatureId: options.signatureId,
+          documentHash: documentHash,
+          signerRole: signatureInfo.role || 'employee',
+          includeQR: options.includeQRCode
+        }, {
+          page: -1
+        });
+      }
+
       // Adăugăm metadata
       const metadata = {
         title: signatureInfo.title || '',
