@@ -1,6 +1,18 @@
-const { PDFDocument, rgb, StandardFonts } = require('pdf-lib');
+const { PDFDocument, rgb, StandardFonts, PDFName, PDFDict, PDFString } = require('pdf-lib');
 const QRCode = require('qrcode');
 const fs = require('fs').promises;
+
+// Opțiuni consistente pentru încărcarea și salvarea PDF-urilor
+const PDF_LOAD_OPTIONS = {
+  updateMetadata: false,
+  ignoreEncryption: true
+};
+
+const PDF_SAVE_OPTIONS = {
+  useObjectStreams: false,
+  addDefaultPage: false,
+  updateMetadata: false
+};
 
 /**
  * Clasa pentru manipularea documentelor PDF
@@ -12,7 +24,7 @@ class PDFManipulator {
    * @param {Buffer|string} source - Buffer-ul sau calea către documentul PDF
    * @returns {Promise<PDFDocument>} Documentul PDF încărcat
    */
-  static async loadPDF(source) {
+  async loadPDF(source) {
     try {
       let pdfBytes;
       if (Buffer.isBuffer(source)) {
@@ -20,7 +32,7 @@ class PDFManipulator {
       } else {
         pdfBytes = await fs.readFile(source);
       }
-      return await PDFDocument.load(pdfBytes);
+      return await PDFDocument.load(pdfBytes, PDF_LOAD_OPTIONS);
     } catch (error) {
       throw new Error(`Eroare la încărcarea PDF-ului: ${error.message}`);
     }
@@ -33,7 +45,7 @@ class PDFManipulator {
    * @param {Object} options - Opțiuni pentru semnătura vizuală
    * @returns {Promise<Object>} Dimensiunile și poziția semnăturii
    */
-  static async addVisualSignature(pdfDoc, signatureInfo, options = {}) {
+  async addVisualSignature(pdfDoc, signatureInfo, options = {}) {
     try {
       const {
         page = 0,
@@ -92,7 +104,7 @@ class PDFManipulator {
    * Calculează dimensiunile necesare pentru semnătura vizuală
    * @private
    */
-  static async _calculateSignatureBox(pdfDoc, signatureInfo, options) {
+  async _calculateSignatureBox(pdfDoc, signatureInfo, options) {
     const { width = 200, height = 100, includeQR = true } = options;
     
     // Ajustăm lățimea în funcție de prezența codului QR
@@ -108,7 +120,7 @@ class PDFManipulator {
    * Desenează fundalul semnăturii
    * @private
    */
-  static async _drawSignatureBackground(page, x, y, width, height) {
+  async _drawSignatureBackground(page, x, y, width, height) {
     // Desenăm un dreptunghi semi-transparent pentru fundal
     page.drawRectangle({
       x,
@@ -126,15 +138,20 @@ class PDFManipulator {
    * Adaugă textul semnăturii
    * @private
    */
-  static async _addSignatureText(page, signatureInfo, position) {
-    const font = await page.doc.embedFont(StandardFonts.Helvetica);
+  async _addSignatureText(page, signatureInfo, position) {
+    const font = await page.doc.embedFont(StandardFonts.TimesRoman);
     const fontSize = 10;
 
+    // Eliminăm diacriticele din text pentru siguranță
+    const normalizeText = (text) => {
+      return text.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+    };
+
     const textLines = [
-      `Semnat digital de: ${signatureInfo.signerName}`,
+      `Semnat digital de: ${normalizeText(signatureInfo.signerName)}`,
       `Email: ${signatureInfo.signerEmail}`,
-      `Organizație: ${signatureInfo.organization}`,
-      `Data: ${new Date(signatureInfo.signedAt).toLocaleString('ro-RO')}`,
+      `Organizatie: ${normalizeText(signatureInfo.organization)}`,
+      `Data: ${new Date(signatureInfo.signedAt || Date.now()).toLocaleString('ro-RO')}`,
       `ID: ${signatureInfo.signatureId}`
     ];
 
@@ -157,7 +174,7 @@ class PDFManipulator {
    * Adaugă codul QR pentru validare
    * @private
    */
-  static async _addSignatureQR(page, signatureInfo, position) {
+  async _addSignatureQR(page, signatureInfo, position) {
     try {
       // Generăm URL-ul de validare
       const validationUrl = `${process.env.REACT_APP_URL}/verify/${signatureInfo.documentHash}/${signatureInfo.signatureId}`;
@@ -186,30 +203,100 @@ class PDFManipulator {
   }
 
   /**
-   * Adaugă metadate la documentul PDF
+   * Adaugă metadata la un document PDF
    * @param {PDFDocument} pdfDoc - Documentul PDF
-   * @param {Object} metadata - Metadatele de adăugat
+   * @param {Object} metadata - Metadata de adăugat
    */
-  static async addMetadata(pdfDoc, metadata) {
+  async addMetadata(pdfDoc, metadata) {
     try {
-      const info = pdfDoc.getInfoDict();
-      
-      // Adăugăm metadatele standard
-      info.set('Title', metadata.title || '');
-      info.set('Author', metadata.author || '');
-      info.set('Subject', metadata.subject || '');
-      info.set('Keywords', metadata.keywords || '');
-      info.set('Creator', 'SmartDoc PAdES Signer');
-      info.set('Producer', 'SmartDoc');
+      // Creăm un nou dicționar pentru informații
+      const info = pdfDoc.context.obj({});
 
-      // Adăugăm metadate personalizate pentru semnături
-      if (metadata.signatures) {
-        const signaturesMeta = JSON.stringify(metadata.signatures);
-        info.set('SignaturesInfo', signaturesMeta);
+      // Adăugăm câmpurile standard
+      if (metadata.title) info.set(PDFName.of('Title'), PDFString.of(metadata.title));
+      if (metadata.author) info.set(PDFName.of('Author'), PDFString.of(metadata.author));
+      if (metadata.subject) info.set(PDFName.of('Subject'), PDFString.of(metadata.subject));
+      if (metadata.keywords) {
+        // Ne asigurăm că keywords este array și îl convertim în string corect formatat
+        const keywordsArray = Array.isArray(metadata.keywords) ? metadata.keywords : [metadata.keywords];
+        info.set(PDFName.of('Keywords'), PDFString.of(keywordsArray.join(' ')));
       }
+      if (metadata.creator) info.set(PDFName.of('Creator'), PDFString.of(metadata.creator));
+      if (metadata.producer) info.set(PDFName.of('Producer'), PDFString.of(metadata.producer));
+
+      // Adăugăm informațiile despre semnături
+      if (metadata.signatures && metadata.signatures.length > 0) {
+        const signaturesStr = JSON.stringify(metadata.signatures);
+        info.set(PDFName.of('SignaturesInfo'), PDFString.of(signaturesStr));
+      }
+
+      // Setăm dicționarul de informații în catalog
+      pdfDoc.catalog.set(PDFName.of('Info'), info);
     } catch (error) {
+      console.error('Error adding metadata:', error);
       throw new Error(`Eroare la adăugarea metadatelor: ${error.message}`);
     }
+  }
+
+  /**
+   * Extrage metadata dintr-un document PDF
+   * @param {PDFDocument} pdfDoc - Documentul PDF
+   * @returns {Promise<Object>} Metadata extrasă
+   */
+  async extractMetadata(pdfDoc) {
+    try {
+      // Obținem dicționarul de informații
+      const info = pdfDoc.catalog.get(PDFName.of('Info'));
+      if (!info) {
+        console.log('No Info dictionary found');
+        return {};
+      }
+
+      // Extragem câmpurile standard
+      const metadata = {
+        title: this.extractString(info, 'Title'),
+        author: this.extractString(info, 'Author'),
+        subject: this.extractString(info, 'Subject'),
+        keywords: this.extractString(info, 'Keywords')?.split(' ') || [],
+        creator: this.extractString(info, 'Creator'),
+        producer: this.extractString(info, 'Producer')
+      };
+
+      // Extragem informațiile despre semnături
+      const signaturesInfo = this.extractString(info, 'SignaturesInfo');
+      if (signaturesInfo) {
+        try {
+          metadata.signatures = JSON.parse(signaturesInfo);
+        } catch (error) {
+          console.error('Error parsing signatures:', error);
+          metadata.signatures = [];
+        }
+      } else {
+        metadata.signatures = [];
+      }
+
+      return metadata;
+    } catch (error) {
+      console.error('Error extracting metadata:', error);
+      throw new Error(`Eroare la extragerea metadatelor: ${error.message}`);
+    }
+  }
+
+  /**
+   * Extrage un string dintr-un dicționar PDF
+   * @private
+   */
+  extractString(dict, key) {
+    const value = dict.get(PDFName.of(key));
+    if (!value) return '';
+    
+    // Dacă valoarea este un PDFString, o decodăm
+    if (value instanceof PDFString) {
+      return value.decodeText();
+    }
+    
+    // Altfel, încercăm să convertim la string
+    return String(value);
   }
 
   /**
@@ -217,46 +304,25 @@ class PDFManipulator {
    * @param {PDFDocument} pdfDoc - Documentul PDF
    * @returns {Promise<Buffer>} Buffer-ul documentului PDF
    */
-  static async savePDF(pdfDoc) {
+  async savePDF(pdfDoc) {
     try {
-      return await pdfDoc.save();
-    } catch (error) {
-      throw new Error(`Eroare la salvarea PDF-ului: ${error.message}`);
-    }
-  }
-
-  /**
-   * Extrage metadatele din documentul PDF
-   * @param {PDFDocument} pdfDoc - Documentul PDF
-   * @returns {Object} Metadatele extrase
-   */
-  static async extractMetadata(pdfDoc) {
-    try {
-      const info = pdfDoc.getInfoDict();
+      // Ne asigurăm că toate obiectele sunt actualizate
+      await pdfDoc.flush();
       
-      const metadata = {
-        title: info.get('Title')?.toString() || '',
-        author: info.get('Author')?.toString() || '',
-        subject: info.get('Subject')?.toString() || '',
-        keywords: info.get('Keywords')?.toString() || '',
-        creator: info.get('Creator')?.toString() || '',
-        producer: info.get('Producer')?.toString() || '',
-        signatures: []
-      };
-
-      // Extragem informațiile despre semnături
-      const signaturesMeta = info.get('SignaturesInfo')?.toString();
-      if (signaturesMeta) {
-        try {
-          metadata.signatures = JSON.parse(signaturesMeta);
-        } catch (e) {
-          console.error('Eroare la parsarea metadatelor semnăturilor:', e);
-        }
+      // Salvăm documentul cu opțiuni consistente
+      const pdfBytes = await pdfDoc.save(PDF_SAVE_OPTIONS);
+      
+      // Convertim la Buffer și verificăm rezultatul
+      const buffer = Buffer.from(pdfBytes);
+      if (!buffer || buffer.length === 0) {
+        throw new Error('PDF-ul generat este gol');
       }
-
-      return metadata;
+      
+      console.log('PDF saved successfully, size:', buffer.length);
+      return buffer;
     } catch (error) {
-      throw new Error(`Eroare la extragerea metadatelor: ${error.message}`);
+      console.error('Detalii eroare salvare PDF:', error);
+      throw new Error(`Eroare la salvarea PDF-ului: ${error.message}`);
     }
   }
 }

@@ -14,6 +14,10 @@ const documentSchema = new mongoose.Schema({
     type: String,
     required: true
   },
+  fileSize: {
+    type: Number,
+    required: true
+  },
   organizationId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Organization',
@@ -28,23 +32,84 @@ const documentSchema = new mongoose.Schema({
     type: Date,
     default: Date.now
   },
+  signatureConfig: [{
+    role: {
+      type: String,
+      required: true,
+      enum: ['org_admin', 'employee', 'manager']
+    },
+    order: {
+      type: Number,
+      required: true,
+      min: 1
+    },
+    required: {
+      type: Boolean,
+      default: true
+    },
+    printOptions: {
+      printDigitalSignature: {
+        type: Boolean,
+        default: true
+      },
+      includeQRCode: {
+        type: Boolean,
+        default: true
+      }
+    }
+  }],
   signatureProgress: {
     currentStep: {
       type: Number,
-      default: 0
+      default: 0,
+      min: 0
     },
     totalSteps: {
       type: Number,
-      default: 0
+      default: 0,
+      min: 0
     },
-    completedSignatures: [{
-      role: String,
-      signedAt: Date,
-      signedBy: {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: 'Employee'
+    signatures: [{
+      signedAt: {
+        type: Date,
+        required: true
       },
-      order: Number
+      signedBy: {
+        id: {
+          type: mongoose.Schema.Types.ObjectId,
+          ref: 'Employee',
+          required: true
+        },
+        role: {
+          type: String,
+          enum: ['org_admin', 'employee', 'manager'],
+          required: true
+        },
+        organization: {
+          type: String,
+          required: true
+        }
+      },
+      signatureInfo: {
+        documentHash: {
+          type: String,
+          required: true
+        },
+        timestamp: {
+          type: Date,
+          required: true
+        },
+        signedBy: {
+          name: String,
+          email: String,
+          organization: String,
+          role: String
+        },
+        signatureId: {
+          type: String,
+          required: true
+        }
+      }
     }]
   },
   employeeCopies: [{
@@ -102,20 +167,6 @@ const documentSchema = new mongoose.Schema({
       customData: mongoose.Schema.Types.Mixed
     }
   }],
-  signatureConfig: [{
-    role: {
-      type: String,
-      required: true
-    },
-    order: {
-      type: Number,
-      default: null
-    },
-    required: {
-      type: Boolean,
-      default: false
-    }
-  }]
 }, {
   timestamps: true
 });
@@ -153,16 +204,32 @@ documentSchema.methods.canSign = async function(employeeId) {
   );
 
   return previousSignatures.every(prevConfig => 
-    this.signatureProgress.completedSignatures.some(
-      sig => sig.role === prevConfig.role
+    this.signatureProgress.signatures.some(
+      sig => sig.signedBy.role === prevConfig.role
     )
   );
 };
 
 // Metodă pentru actualizarea progresului semnăturilor
 documentSchema.methods.updateSignatureProgress = function() {
-  this.signatureProgress.currentStep = this.signatureProgress.completedSignatures.length;
+  this.signatureProgress.currentStep = this.signatureProgress.signatures.length;
   return this.save();
+};
+
+// Adăugăm o metodă pentru a calcula progresul semnăturilor
+documentSchema.methods.getSignatureProgress = function() {
+  const total = this.signatureConfig.length;
+  const completed = this.signatureProgress?.signatures?.length || 0;
+  return {
+    completed,
+    total,
+    percentage: total > 0 ? Math.round((completed / total) * 100) : 0
+  };
+};
+
+// Adăugăm o metodă pentru a verifica dacă toate semnăturile sunt complete
+documentSchema.methods.isFullySigned = function() {
+  return this.signatureProgress?.signatures?.length === this.signatureConfig.length;
 };
 
 module.exports = mongoose.model('Document', documentSchema); 

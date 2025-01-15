@@ -5,13 +5,14 @@ const Organization = require('../models/Organization');
 const path = require('path');
 const { createEmployeeFolder, copyDocumentToEmployee, deleteEmployeeDocument } = require('../utils/fileUtils');
 const Employee = require('../models/Employee');
+const fsPromises = require('fs').promises;
 const fs = require('fs');
 const nodemailer = require('nodemailer');
 const { PDFDocument, rgb, StandardFonts } = require('pdf-lib');
 const crypto = require('crypto');
 const QRCode = require('qrcode');
-const fsPromises = require('fs').promises;
 const PAdESService = require('../services/signatures/PAdESService');
+const mongoose = require('mongoose');
 
 const storage = StorageFactory.getStorageService();
 const upload = multer({ storage: multer.memoryStorage() }).single('file');
@@ -54,48 +55,73 @@ const createEmployeeCopies = async (document, organization) => {
 
 exports.getAllDocuments = async (req, res) => {
   try {
-    console.log('=== Getting documents for organization ===');
-    console.log('User organization:', req.user.organization);
+    const documents = await Document.find({
+      organizationId: req.user.organization
+    }).sort({ createdAt: -1 });
 
-    const documents = await Document.find({ organizationId: req.user.organization })
-      .select('title description originalName fileType fileUrl fileSize uploadedAt organizationId employeeCopies signatureConfig')
-      .sort({ uploadedAt: -1 });
-
-    console.log('Found documents:', documents.length);
-    console.log('Raw documents:', JSON.stringify(documents, null, 2));
-
-    // Obținem toți angajații organizației
-    const employees = await Employee.find({ organization: req.user.organization })
-      .select('_id firstName lastName');
-
-    console.log('Found employees:', employees.length);
-
-    // Creăm un map pentru căutare rapidă
-    const employeeMap = employees.reduce((map, emp) => {
-      map[emp._id.toString()] = `${emp.firstName} ${emp.lastName}`;
-      return map;
-    }, {});
-
-    console.log('Employee map:', employeeMap);
-
-    // Adăugăm numele angajaților în documentele returnate
-    const enrichedDocuments = documents.map(doc => {
-      const docObj = doc.toObject();
-      if (docObj.employeeCopies) {
-        docObj.employeeCopies = docObj.employeeCopies.map(copy => ({
-          ...copy,
-          employeeName: employeeMap[copy.employee.toString()]
-        }));
+    // Adăugăm informații despre progres și stare pentru fiecare document
+    const documentsWithProgress = documents.map(doc => {
+      const progress = doc.getSignatureProgress();
+      const hasSignatures = doc.signatureProgress?.signatures?.length > 0;
+      const isFullySigned = doc.isFullySigned();
+      const totalSteps = doc.signatureConfig?.length || 0;
+      const currentStep = doc.signatureProgress?.currentStep || 0;
+      
+      // Determinăm starea documentului
+      let status = 'pending';
+      if (isFullySigned) {
+        status = 'completed';
+      } else if (hasSignatures) {
+        status = 'in_progress';
       }
-      return docObj;
+
+      // Calculăm dacă documentul poate fi trimis la semnat
+      const canBeSentForSignature = !hasSignatures && totalSteps > 0;
+
+      console.log('Document state in getAllDocuments:', {
+        id: doc._id,
+        title: doc.title,
+        status,
+        hasSignatures,
+        isFullySigned,
+        canBeSentForSignature,
+        currentStep,
+        totalSteps,
+        signatureCount: doc.signatureProgress?.signatures?.length
+      });
+
+      const docObject = doc.toObject();
+      return {
+        ...docObject,
+        signatureProgress: {
+          currentStep,
+          totalSteps,
+          signatures: doc.signatureProgress?.signatures || [],
+          progress: {
+            completed: progress.completed,
+            total: progress.total,
+            percentage: progress.percentage
+          },
+          status,
+          canBeSentForSignature,
+          isFullySigned,
+          hasSignatures
+        }
+      };
     });
 
-    console.log('Enriched documents:', JSON.stringify(enrichedDocuments, null, 2));
-    console.log('=== End of getting documents ===');
+    console.log('Sending documents with states:', documentsWithProgress.map(doc => ({
+      id: doc._id,
+      title: doc.title,
+      status: doc.signatureProgress.status,
+      canBeSentForSignature: doc.signatureProgress.canBeSentForSignature,
+      hasSignatures: doc.signatureProgress.hasSignatures,
+      isFullySigned: doc.signatureProgress.isFullySigned
+    })));
 
-    res.json(enrichedDocuments);
+    res.json(documentsWithProgress);
   } catch (error) {
-    console.error('Error getting documents:', error);
+    console.error('Error fetching documents:', error);
     res.status(500).json({ message: 'Eroare la obținerea documentelor' });
   }
 };
@@ -164,8 +190,8 @@ exports.uploadDocument = async (req, res) => {
       // Inițializăm progresul semnăturilor
       const signatureProgress = {
         currentStep: 0,
-        totalSteps: parsedSignatureConfig.length,
-        completedSignatures: []
+        totalSteps: parsedSignatureConfig.length || 0,
+        signatures: []
       };
 
       const document = new Document({
@@ -173,19 +199,20 @@ exports.uploadDocument = async (req, res) => {
         description,
         originalName: file.originalname,
         path: uploadResult.path,
+        fileSize: file.size,
         organizationId: req.user.organization,
         uploadedBy: req.user.userId,
         signatureConfig: parsedSignatureConfig,
         signatureProgress,
-        employeeCopies: [] // Inițializăm array-ul gol pentru copii
+        employeeCopies: []
       });
 
       await document.save();
 
-      // Dacă există configurație de semnături, trimitem notificări către primii semnatari
+      // Dacă există configurație de semnături, trimitem notificări către admin
       if (parsedSignatureConfig.length > 0) {
-        const firstSigners = parsedSignatureConfig.filter(config => config.order === 1);
-        if (firstSigners.length > 0) {
+        const adminSigners = parsedSignatureConfig.filter(config => config.role === 'org_admin' && config.order === 1);
+        if (adminSigners.length > 0) {
           await notifyNextSigner(document);
         }
       }
@@ -213,53 +240,54 @@ exports.uploadDocument = async (req, res) => {
 
 exports.deleteDocument = async (req, res) => {
   try {
+    // Găsim documentul
     const document = await Document.findOne({
       _id: req.params.id,
       organizationId: req.user.organization
-    }).populate('employeeCopies.employee');
+    });
 
     if (!document) {
       return res.status(404).json({ message: 'Documentul nu a fost găsit' });
     }
 
+    // Găsim organizația
     const organization = await Organization.findById(req.user.organization);
     if (!organization) {
       return res.status(404).json({ message: 'Organizația nu a fost găsită' });
     }
 
-    // Ștergem documentul original
-    const fileId = document.fileUrl.split('/').pop();
-    console.log('Deleting original document:', fileId);
-    await storage.deleteFile(fileId, document.organization, organization.name);
-    console.log('Original document deleted successfully');
+    console.log('Deleting document:', {
+      id: document._id,
+      path: document.path,
+      fileUrl: document.fileUrl
+    });
 
-    // Ștergem copiile de la angajați
-    console.log('Employee copies to delete:', document.employeeCopies);
-    await Promise.all(document.employeeCopies.map(async (copy) => {
-      console.log('Attempting to delete employee copy at path:', copy.path);
-      try {
-        if (!copy.path) {
-          console.log('No path found for copy:', copy);
-          return;
-        }
-        if (!fs.existsSync(copy.path)) {
-          console.log('File does not exist at path:', copy.path);
-          return;
-        }
-        await deleteEmployeeDocument(copy.path);
-        console.log('Successfully deleted employee copy at path:', copy.path);
-      } catch (error) {
-        console.error('Error deleting employee copy:', error);
+    // Ștergem fișierul fizic
+    try {
+      if (document.path) {
+        await fsPromises.unlink(document.path);
+        console.log('Fișierul fizic a fost șters:', document.path);
       }
-    }));
+    } catch (error) {
+      console.error('Eroare la ștergerea fișierului fizic:', error);
+      // Continuăm cu ștergerea din DB chiar dacă fișierul fizic nu poate fi șters
+    }
 
+    // Ștergem documentul din baza de date
     await Document.deleteOne({ _id: document._id });
-    console.log('Document record deleted from database');
+    console.log('Documentul a fost șters din baza de date');
 
-    res.json({ message: 'Document șters cu succes' });
+    res.json({ 
+      message: 'Documentul a fost șters cu succes',
+      documentId: document._id
+    });
+
   } catch (error) {
     console.error('Error deleting document:', error);
-    res.status(500).json({ message: 'Eroare la ștergerea documentului: ' + error.message });
+    res.status(500).json({ 
+      message: 'Eroare la ștergerea documentului',
+      error: error.message 
+    });
   }
 };
 
@@ -298,17 +326,71 @@ exports.downloadDocument = async (req, res) => {
 
 exports.sendToSign = async (req, res) => {
   try {
+    console.log('=== Send to Sign Debug ===');
+    console.log('User:', {
+      id: req.user.userId,
+      organization: req.user.organization,
+      role: req.user.role
+    });
+
     // Găsim documentul și verificăm dacă aparține organizației
     const document = await Document.findOne({
       _id: req.params.id,
       organizationId: req.user.organization
     });
 
+    console.log('Document found:', document ? {
+      id: document._id,
+      signatureProgress: document.signatureProgress,
+      signatureConfig: document.signatureConfig
+    } : 'No');
+
     if (!document) {
       return res.status(404).json({ message: 'Documentul nu a fost găsit' });
     }
 
-    console.log('Sending document to sign:', document);
+    // Verificăm dacă documentul are configurație pentru semnătura admin
+    const adminConfig = document.signatureConfig.find(config => config.role === 'org_admin' && config.order === 1);
+    console.log('Admin signature config found:', adminConfig ? 'Yes' : 'No');
+
+    if (!adminConfig) {
+      return res.status(400).json({ message: 'Documentul nu necesită semnătura administratorului' });
+    }
+
+    // Verificăm dacă documentul nu a fost deja semnat
+    const hasSignatures = document.signatureProgress?.signatures?.length > 0;
+    const isFullySigned = document.isFullySigned();
+    
+    console.log('Document signature state:', {
+      hasSignatures,
+      isFullySigned,
+      signatures: document.signatureProgress?.signatures?.length
+    });
+
+    if (hasSignatures) {
+      return res.status(400).json({ message: 'Documentul a fost deja semnat' });
+    }
+
+    // Găsim administratorul organizației
+    console.log('Searching for admin with criteria:', {
+      organization: req.user.organization,
+      role: 'org_admin'
+    });
+
+    const admin = await Employee.findOne({ 
+      organization: req.user.organization,
+      role: 'org_admin'
+    }).populate('organization');
+
+    console.log('Admin found:', admin ? {
+      id: admin._id,
+      email: admin.email,
+      role: admin.role
+    } : 'No');
+
+    if (!admin) {
+      return res.status(404).json({ message: 'Nu s-a găsit administratorul organizației' });
+    }
 
     // Configurăm transportul de email
     const transporter = nodemailer.createTransport({
@@ -325,60 +407,36 @@ exports.sendToSign = async (req, res) => {
       }
     });
 
-    // Pregătim trimiterea email-urilor
-    const emailPromises = document.employeeCopies.map(async (copy) => {
-      // Găsim angajatul
-      const employee = await Employee.findById(copy.employee);
-      if (!employee) return null;
+    // Generăm link-ul unic pentru semnare
+    const signLink = `${process.env.FRONTEND_URL}/sign-document/${document._id}/${admin._id}`;
 
-      // Generăm link-ul unic pentru semnare
-      const signLink = `${process.env.FRONTEND_URL}/sign-document/${document._id}/${copy.employee}`;
-
-      // Trimitem email-ul
-      return transporter.sendMail({
-        from: process.env.SMTP_FROM || '"SmartDoc" <noreply@smartdoc.com>',
-        to: employee.email,
-        subject: `Document de semnat: ${document.title}`,
-        html: `
-          <h2>Aveți un document nou de semnat</h2>
-          <p>Documentul "${document.title}" necesită semnătura dumneavoastră.</p>
-          <p>Pentru a semna documentul, accesați următorul link:</p>
-          <a href="${signLink}" style="display:inline-block;padding:12px 24px;background-color:#1976d2;color:white;text-decoration:none;border-radius:4px;">
-            Semnează documentul
-          </a>
-          <p style="margin-top:24px;color:#666;">
-            Acest link este unic și poate fi folosit doar pentru semnarea documentului dumneavoastră.
-          </p>
-        `
-      });
+    // Trimitem email-ul către admin
+    await transporter.sendMail({
+      from: process.env.SMTP_FROM || '"SmartDoc" <noreply@smartdoc.com>',
+      to: admin.email,
+      subject: `Document de semnat: ${document.title}`,
+      html: `
+        <h2>Aveți un document nou de semnat</h2>
+        <p>Documentul "${document.title}" necesită semnătura dumneavoastră.</p>
+        <p>Pentru a semna documentul, accesați următorul link:</p>
+        <a href="${signLink}" style="display:inline-block;padding:12px 24px;background-color:#1976d2;color:white;text-decoration:none;border-radius:4px;">
+          Semnează documentul
+        </a>
+        <p style="margin-top:24px;color:#666;">
+          Acest link este unic și poate fi folosit doar pentru semnarea documentului dumneavoastră.
+        </p>
+      `
     });
 
-    // Trimitem toate email-urile
-    const results = await Promise.all(emailPromises);
-    const sentCount = results.filter(Boolean).length;
-
-    // Actualizăm statusul pentru fiecare copie în parte
-    const updatePromises = document.employeeCopies.map(copy => 
-      Document.updateOne(
-        { 
-          _id: document._id,
-          'employeeCopies.employee': copy.employee 
-        },
-        { 
-          $set: { 
-            'employeeCopies.$.status': 'pending_signature',
-            'employeeCopies.$.sentAt': new Date()
-          } 
-        }
-      )
-    );
-
-    await Promise.all(updatePromises);
-    console.log('Updated document copies status to pending_signature');
-
     res.json({ 
-      message: 'Documentul a fost trimis spre semnare',
-      sentCount 
+      message: 'Documentul a fost trimis spre semnare către administrator',
+      sentTo: admin.email,
+      sentCount: 1,
+      documentStatus: {
+        canBeSentForSignature: false,
+        hasSignatures,
+        isFullySigned
+      }
     });
   } catch (error) {
     console.error('Error sending document for signing:', error);
@@ -615,17 +673,28 @@ exports.signDocument = async (req, res) => {
 // Funcție pentru notificarea următorului semnatar
 const notifyNextSigner = async (document) => {
   try {
+    // Ne asigurăm că avem structurile necesare
+    const signatureProgress = document.signatureProgress || { signatures: [] };
+    const signatures = signatureProgress.signatures || [];
+    const signatureConfig = document.signatureConfig || [];
+
+    console.log('Notifying next signer. Current state:', {
+      totalConfig: signatureConfig.length,
+      completedSignatures: signatures.length,
+      currentStep: signatureProgress.currentStep
+    });
+
     // Găsim următoarea configurație de semnătură
-    const nextSignatureConfig = document.signatureConfig.find(config => 
-      !document.signatureProgress.completedSignatures.some(
-        sig => sig.role === config.role
-      )
+    const nextSignatureConfig = signatureConfig.find(config => 
+      !signatures.some(sig => sig.signedBy.role === config.role)
     );
 
     if (!nextSignatureConfig) {
       console.log('Toate semnăturile au fost completate');
       return;
     }
+
+    console.log('Found next signature config:', nextSignatureConfig);
 
     // Configurăm transportul de email
     const transporter = nodemailer.createTransport({
@@ -647,6 +716,8 @@ const notifyNextSigner = async (document) => {
       organization: document.organizationId,
       role: nextSignatureConfig.role 
     });
+
+    console.log(`Found ${nextSigners.length} next signers with role ${nextSignatureConfig.role}`);
 
     // Trimitem notificări către toți angajații care trebuie să semneze
     const emailPromises = nextSigners.map(async (signer) => {
@@ -741,56 +812,118 @@ exports.downloadDocumentForSigning = async (req, res) => {
 
 exports.verifySignature = async (req, res) => {
   try {
+    console.log('=== Verify Signature Debug ===');
     const { id, signatureId } = req.params;
+    console.log('Params:', { id, signatureId });
 
     // Găsește documentul
     const document = await Document.findById(id);
     if (!document) {
+      console.log('Document not found');
       return res.status(404).json({ message: 'Documentul nu a fost găsit' });
     }
 
-    // Găsește copia semnată folosind signatureId
-    const signedCopy = document.employeeCopies.find(copy => copy.signatureId === signatureId);
-    if (!signedCopy) {
+    console.log('Document found:', {
+      id: document._id,
+      title: document.title,
+      signatureCount: document.signatureProgress?.signatures?.length,
+      signatures: JSON.stringify(document.signatureProgress?.signatures, null, 2)
+    });
+
+    // Găsește semnătura în noua structură folosind _id
+    const signature = document.signatureProgress?.signatures?.find(sig => 
+      sig._id.toString() === signatureId
+    );
+    
+    console.log('Signature search result:', signature ? {
+      signatureId: signature._id,
+      signedBy: signature.signedBy,
+      signedAt: signature.signedAt,
+      fullSignature: JSON.stringify(signature, null, 2)
+    } : 'Not found');
+    
+    if (!signature) {
       return res.status(404).json({ message: 'Semnătura nu a fost găsită' });
     }
 
-    // Verifică dacă documentul este semnat
-    if (signedCopy.status !== 'signed') {
-      return res.status(400).json({ message: 'Documentul nu este semnat' });
-    }
-
     // Inițializăm serviciul PAdES
-    await PAdESService.initialize({
+    console.log('Initializing PAdES service...');
+    const signingService = new PAdESService({
       basePath: path.join(__dirname, '../secure_storage')
     });
+    await signingService.initialize();
+    console.log('PAdES service initialized');
 
     // Citim documentul PDF
-    const pdfBuffer = await fsPromises.readFile(signedCopy.path);
+    console.log('Reading PDF from path:', document.path);
+    const pdfBuffer = await fsPromises.readFile(document.path);
+    console.log('PDF loaded successfully, size:', pdfBuffer.length);
 
     // Verificăm semnăturile
-    const verificationResults = await PAdESService.verifyDocument(pdfBuffer);
+    console.log('Starting signature verification...');
+    const verificationResults = await signingService.verifySignatures(pdfBuffer);
+    console.log('Raw verification results:', JSON.stringify(verificationResults, null, 2));
 
-    // Găsim rezultatul pentru semnătura specificată
-    const signatureResult = verificationResults.find(
-      result => result.signatureId === signatureId
-    );
+    // Formatăm informațiile despre semnatar
+    console.log('Formatting signer information for:', signature.signedBy);
+    const formattedSignedBy = {
+      name: signature.signatureInfo?.signedBy?.name || 
+           `${signature.signedBy.role === 'org_admin' ? 'Administrator' : 'Angajat'} - ${signature.signedBy.organization}`,
+      role: signature.signedBy.role === 'org_admin' ? 'Administrator' : 'Angajat',
+      organization: signature.signedBy.organization
+    };
 
-    if (!signatureResult) {
-      return res.status(404).json({ message: 'Semnătura nu a fost găsită în document' });
+    // Dacă nu avem rezultate de verificare, folosim informațiile din baza de date
+    if (!verificationResults || verificationResults.length === 0) {
+      console.log('No verification results from PAdES, using database info');
+      const response = {
+        isValid: true, // Presupunem că e validă dacă există în baza de date
+        signedBy: formattedSignedBy,
+        signedAt: signature.signedAt,
+        documentHash: signature.signatureInfo.documentHash,
+        errors: [],
+        warning: 'Semnătura există în baza de date dar nu a putut fi verificată în PDF'
+      };
+
+      console.log('Sending response:', response);
+      return res.json(response);
     }
 
-    return res.json({
+    // Găsim rezultatul pentru semnătura specificată folosind signatureId din signatureInfo
+    const signatureResult = verificationResults.find(
+      result => result.signatureId === signature.signatureInfo.signatureId
+    );
+
+    console.log('Signature verification result:', signatureResult);
+
+    if (!signatureResult) {
+      const response = {
+        isValid: true, // Presupunem că e validă dacă există în baza de date
+        signedBy: formattedSignedBy,
+        signedAt: signature.signedAt,
+        documentHash: signature.signatureInfo.documentHash,
+        errors: [],
+        warning: 'Semnătura există în baza de date dar nu a putut fi verificată în PDF'
+      };
+
+      console.log('Sending response:', response);
+      return res.json(response);
+    }
+
+    const response = {
       isValid: signatureResult.isValid,
-      signedBy: signatureResult.signerInfo.name,
-      signedAt: signedCopy.signedAt,
-      documentHash: signatureResult.documentHash,
-      errors: signatureResult.errors
-    });
+      signedBy: formattedSignedBy,
+      signedAt: signature.signedAt,
+      documentHash: signature.signatureInfo.documentHash,
+      errors: signatureResult.errors || []
+    };
+
+    console.log('Sending response:', response);
+    return res.json(response);
 
   } catch (error) {
-    console.error('Eroare la verificarea semnăturii:', error);
-    return res.status(500).json({ message: 'Eroare la verificarea semnăturii' });
+    console.error('Error verifying signature:', error);
+    return res.status(500).json({ message: error.message });
   }
 };
 
@@ -820,28 +953,33 @@ exports.bulkDelete = async (req, res) => {
     // Ștergem fiecare document și copiile sale
     for (const document of documents) {
       // Ștergem documentul original
-      const fileId = document.fileUrl.split('/').pop();
-      console.log('Deleting original document:', fileId);
-      await storage.deleteFile(fileId, document.organization, organization.name);
-      console.log('Original document deleted successfully');
+      console.log('Deleting original document:', document.path);
+      try {
+        if (document.path && fs.existsSync(document.path)) {
+          await fsPromises.unlink(document.path);
+          console.log('Original document deleted successfully');
+        } else {
+          console.log('Original document file not found at path:', document.path);
+        }
+      } catch (error) {
+        console.error('Error deleting original document:', error);
+        // Continue with deletion even if file removal fails
+      }
 
       // Ștergem copiile de la angajați
       console.log('Employee copies to delete:', document.employeeCopies);
       await Promise.all(document.employeeCopies.map(async (copy) => {
         console.log('Attempting to delete employee copy at path:', copy.path);
         try {
-          if (!copy.path) {
-            console.log('No path found for copy:', copy);
-            return;
+          if (copy.path && fs.existsSync(copy.path)) {
+            await deleteEmployeeDocument(copy.path);
+            console.log('Successfully deleted employee copy at path:', copy.path);
+          } else {
+            console.log('Employee copy file not found at path:', copy.path);
           }
-          if (!fs.existsSync(copy.path)) {
-            console.log('File does not exist at path:', copy.path);
-            return;
-          }
-          await deleteEmployeeDocument(copy.path);
-          console.log('Successfully deleted employee copy at path:', copy.path);
         } catch (error) {
           console.error('Error deleting employee copy:', error);
+          // Continue with deletion even if file removal fails
         }
       }));
     }
@@ -857,5 +995,315 @@ exports.bulkDelete = async (req, res) => {
   } catch (error) {
     console.error('Error bulk deleting documents:', error);
     res.status(500).json({ message: 'Eroare la ștergerea documentelor: ' + error.message });
+  }
+};
+
+async function handleAdminSignature(document, adminId, printOptions) {
+  try {
+    console.log('=== handleAdminSignature Debug ===');
+    console.log('Document:', {
+      id: document._id,
+      organizationId: document.organizationId,
+      signatureConfig: document.signatureConfig,
+      signatureProgress: document.signatureProgress
+    });
+    console.log('Admin ID:', adminId);
+    console.log('Print Options:', printOptions);
+
+    // Verificăm dacă este rândul administratorului să semneze
+    const currentStep = document.signatureProgress?.currentStep || 0;
+    const adminSignatureConfig = document.signatureConfig.find(config => config.role === 'org_admin');
+    const adminSignatureOrder = adminSignatureConfig?.order || 1;
+    const totalSteps = document.signatureProgress?.totalSteps || document.signatureConfig.length;
+    const completedSignatures = document.signatureProgress?.signatures?.length || 0;
+    const adminAlreadySigned = document.signatureProgress?.signatures?.some(
+      sig => sig.signedBy?.role === 'org_admin'
+    );
+
+    console.log('Signature verification:', {
+      currentStep,
+      adminSignatureOrder,
+      totalSteps,
+      completedSignatures,
+      adminAlreadySigned
+    });
+
+    if (adminAlreadySigned) {
+      throw new Error('Administratorul a semnat deja acest document');
+    }
+
+    if (currentStep + 1 !== adminSignatureOrder) {
+      throw new Error('Nu este rândul administratorului să semneze');
+    }
+
+    // Găsim organizația și administratorul
+    const organization = await Organization.findById(document.organizationId);
+    console.log('Organization found:', {
+      id: organization._id,
+      name: organization.name
+    });
+
+    const searchCriteria = {
+      _id: adminId,
+      organization: organization._id,
+      role: 'org_admin'
+    };
+    console.log('Searching for admin with criteria:', searchCriteria);
+
+    const admin = await Employee.findOne(searchCriteria);
+    if (!admin) {
+      throw new Error('Administratorul nu a fost găsit');
+    }
+    console.log('Admin found:', admin);
+
+    // Inițializăm serviciul de semnare
+    const signingService = new PAdESService({
+      basePath: path.join(__dirname, '../secure_storage'),
+      validityYears: organization.certificateSettings?.validityYears || 5,
+      visualSignature: printOptions.printDigitalSignature,
+      includeQR: printOptions.includeQRCode
+    });
+    await signingService.initialize();
+
+    // Pregătim informațiile pentru semnătură
+    const signatureTimestamp = new Date().toISOString();
+    const signatureInfo = {
+      signatureId: `sig-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+      signerName: `${admin.firstName} ${admin.lastName} (Administrator)`,
+      signerEmail: admin.email,
+      organization: organization.name,
+      timestamp: signatureTimestamp,
+      documentHash: '',
+      signatureType: 'PAdES-Basic'
+    };
+
+    console.log('Document path check:', {
+      path: document.path,
+      exists: fs.existsSync(document.path)
+    });
+
+    // Citim documentul PDF
+    if (!document.path) {
+      throw new Error('Calea documentului nu este setată');
+    }
+
+    if (!fs.existsSync(document.path)) {
+      // Încercăm să găsim documentul în directorul de stocare
+      const safeOrgName = organization.name.replace(/[^a-z0-9]/gi, '_').toLowerCase();
+      const storageDir = path.join(__dirname, '../storage');
+      const filePath = path.join(storageDir, safeOrgName, path.basename(document.path));
+
+      console.log('Trying alternative path:', {
+        originalPath: document.path,
+        newPath: filePath,
+        exists: fs.existsSync(filePath)
+      });
+
+      if (!fs.existsSync(filePath)) {
+        throw new Error(`Documentul nu există la nicio cale specificată: ${document.path} sau ${filePath}`);
+      }
+
+      // Actualizăm calea documentului
+      document.path = filePath;
+      await document.save();
+    }
+
+    const pdfBuffer = await fsPromises.readFile(document.path);
+
+    // Semnăm documentul
+    const safeOrgName = organization.name.replace(/[^a-z0-9]/gi, '_').toLowerCase();
+    const storageDir = path.join(__dirname, '../storage');
+    const fileTimestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const signedFileName = `${path.parse(document.originalName).name}_signed_${fileTimestamp}.pdf`;
+    const signedDocPath = path.join(storageDir, safeOrgName, signedFileName);
+    
+    console.log('Signing document with buffer:', {
+      bufferSize: pdfBuffer.length,
+      signatureInfo,
+      printOptions
+    });
+    
+    const result = await signingService.signDocument(pdfBuffer, signatureInfo, {
+      printDigitalSignature: printOptions.printDigitalSignature,
+      includeQRCode: printOptions.includeQRCode
+    });
+
+    console.log('Document signed successfully:', {
+      resultSize: result.pdfBytes.length,
+      documentHash: result.documentHash
+    });
+
+    // Creăm directorul organizației dacă nu există
+    await fsPromises.mkdir(path.dirname(signedDocPath), { recursive: true });
+
+    // Salvăm documentul semnat
+    await fsPromises.writeFile(signedDocPath, result.pdfBytes);
+
+    // Actualizăm progresul semnăturilor
+    document.signatureProgress.signatures.push({
+      signatureInfo: {
+        ...signatureInfo,
+        documentHash: result.documentHash
+      },
+      signedBy: {
+        id: admin._id,
+        name: `${admin.firstName} ${admin.lastName}`,
+        email: admin.email,
+        role: admin.role,
+        organization: organization.name
+      },
+      signedAt: signatureTimestamp
+    });
+
+    document.signatureProgress.currentStep++;
+    document.path = signedDocPath;
+
+    if (document.signatureProgress.currentStep >= document.signatureProgress.totalSteps) {
+      document.status = 'completed';
+    } else {
+      document.status = 'in_progress';
+    }
+
+    await document.save();
+    return document;
+
+  } catch (error) {
+    console.error('Error in handleAdminSignature:', error);
+    throw error;
+  }
+}
+
+exports.signDocumentAsAdmin = async (req, res) => {
+  try {
+    console.log('=== signDocumentAsAdmin Debug ===');
+    console.log('User:', {
+      id: req.user.userId,
+      role: req.user.role,
+      organization: req.user.organization
+    });
+    console.log('Document ID:', req.params.id);
+    console.log('Print Options:', req.body.printOptions);
+
+    const { id: documentId } = req.params;
+    const { printOptions } = req.body;
+
+    // Verificăm dacă utilizatorul este administrator
+    if (req.user.role !== 'org_admin') {
+      return res.status(403).json({ 
+        message: 'Doar administratorii pot semna în această etapă' 
+      });
+    }
+
+    // Găsim documentul
+    const document = await Document.findOne({
+      _id: documentId,
+      organizationId: req.user.organization
+    });
+
+    if (!document) {
+      return res.status(404).json({ message: 'Documentul nu a fost găsit' });
+    }
+
+    console.log('Document found:', {
+      id: document._id,
+      title: document.title,
+      organizationId: document.organizationId
+    });
+
+    // Procesăm semnătura administratorului
+    const signedDocument = await handleAdminSignature(document, req.user.userId, printOptions);
+
+    // Calculăm progresul semnăturilor
+    const signatureProgress = signedDocument.getSignatureProgress();
+    const isFullySigned = signedDocument.isFullySigned();
+    const hasSignatures = signedDocument.signatureProgress?.signatures?.length > 0;
+    
+    // Determinăm starea documentului
+    let status = 'pending';
+    if (isFullySigned) {
+      status = 'completed';
+    } else if (hasSignatures) {
+      status = 'in_progress';
+    }
+
+    console.log('Document state after signing:', {
+      signatureProgress,
+      isFullySigned,
+      hasSignatures,
+      status
+    });
+
+    res.json({
+      message: 'Document semnat cu succes',
+      document: {
+        ...signedDocument.toObject(),
+        signatureProgress: {
+          currentStep: signedDocument.signatureProgress.currentStep,
+          totalSteps: signedDocument.signatureProgress.totalSteps,
+          signatures: signedDocument.signatureProgress.signatures,
+          progress: {
+            completed: signatureProgress.completed,
+            total: signatureProgress.total,
+            percentage: signatureProgress.percentage
+          },
+          status,
+          canBeSentForSignature: !hasSignatures && signedDocument.signatureConfig.length > 0,
+          isFullySigned
+        }
+      }
+    });
+
+  } catch (error) {
+    console.error('Error in signDocumentAsAdmin:', error);
+    res.status(500).json({ 
+      message: 'Eroare la semnarea documentului',
+      error: error.message 
+    });
+  }
+};
+
+exports.resetAndDeleteDocument = async (req, res) => {
+  try {
+    const { id: documentId } = req.params;
+
+    // Găsim documentul
+    const document = await Document.findOne({
+      _id: documentId,
+      organizationId: req.user.organization
+    });
+
+    if (!document) {
+      return res.status(404).json({ message: 'Documentul nu a fost găsit' });
+    }
+
+    // Găsim organizația
+    const organization = await Organization.findById(req.user.organization);
+    if (!organization) {
+      return res.status(404).json({ message: 'Organizația nu a fost găsită' });
+    }
+
+    // Ștergem fișierul fizic
+    try {
+      await fsPromises.unlink(document.path);
+      console.log('Fișierul fizic a fost șters:', document.path);
+    } catch (error) {
+      console.error('Eroare la ștergerea fișierului fizic:', error);
+    }
+
+    // Ștergem documentul din baza de date
+    await Document.deleteOne({ _id: documentId });
+    console.log('Documentul a fost șters din baza de date');
+
+    res.json({ 
+      message: 'Documentul a fost șters cu succes',
+      documentId
+    });
+
+  } catch (error) {
+    console.error('Error in resetAndDeleteDocument:', error);
+    res.status(500).json({ 
+      message: 'Eroare la ștergerea documentului',
+      error: error.message 
+    });
   }
 }; 

@@ -2,6 +2,7 @@ const Employee = require('../models/Employee');
 const Document = require('../models/Document');
 const Organization = require('../models/Organization');
 const path = require('path');
+const fsPromises = require('fs').promises;
 const fs = require('fs');
 const { createEmployeeFolder, copyDocumentToEmployee, deleteEmployeeDocument } = require('../utils/fileUtils');
 
@@ -96,7 +97,7 @@ exports.createEmployee = async (req, res) => {
       }
       
       // Listăm fișierele din folderul organizației
-      const files = fs.readdirSync(orgPath);
+      const files = await fsPromises.readdir(orgPath);
       console.log('Files in organization folder:', files);
       
       if (files.length === 0) {
@@ -149,7 +150,7 @@ exports.deleteEmployee = async (req, res) => {
     );
     
     if (fs.existsSync(employeePath)) {
-      fs.rmSync(employeePath, { recursive: true, force: true });
+      await fsPromises.rm(employeePath, { recursive: true, force: true });
     }
 
     // Ștergem referințele din colecția Document
@@ -243,7 +244,7 @@ exports.deleteEmployeeDocument = async (req, res) => {
 
     // Ștergem fișierul fizic
     if (employeeCopy.path && fs.existsSync(employeeCopy.path)) {
-      await fs.promises.unlink(employeeCopy.path);
+      await fsPromises.unlink(employeeCopy.path);
     }
 
     // Eliminăm copia din array-ul employeeCopies

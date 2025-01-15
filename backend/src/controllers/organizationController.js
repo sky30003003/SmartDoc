@@ -50,16 +50,55 @@ exports.createOrganization = async (req, res) => {
     const defaultPassword = `${email.substring(0, 6)}123!`;
 
     // Creăm userul admin pentru organizație
+    const adminId = new mongoose.Types.ObjectId();
+    
     const user = new User({
+      _id: adminId,
       email,
       password: defaultPassword,
       firstName: 'Admin',
       lastName: organization.name,
       role: 'org_admin',
       organization: organization._id,
-      status: 'active'  // Userul este activ direct
+      status: 'active'
     });
     await user.save();
+
+    // Creăm și înregistrarea de Employee pentru admin
+    console.log('Creating Employee record for admin with data:', {
+      _id: adminId,
+      firstName: 'Admin',
+      lastName: organization.name,
+      email: email,
+      role: 'org_admin',
+      organization: organization._id,
+      status: 'active',
+      cnp: cuiCnp
+    });
+
+    const employee = new Employee({
+      _id: adminId,
+      firstName: 'Admin',
+      lastName: organization.name,
+      email: email,
+      role: 'org_admin',
+      organization: organization._id,
+      status: 'active',
+      cnp: cuiCnp
+    });
+
+    try {
+      await employee.save();
+      console.log('Employee record created successfully:', employee);
+    } catch (error) {
+      console.error('Error creating Employee record:', error);
+      throw error;
+    }
+
+    // Adăugăm employee la lista de admins a organizației
+    organization.admins.push(employee._id);
+    await organization.save();
+    console.log('Organization updated with admin:', organization);
 
     // Trimitem email-ul cu credențialele
     await emailService.sendWelcomeEmail({

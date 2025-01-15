@@ -23,12 +23,18 @@ class DigitalSignatureService {
    * @returns {Object} Obiect conținând cheile publică și privată în format PEM
    */
   static generateKeyPair() {
-    const keypair = forge.pki.rsa.generateKeyPair({ bits: 2048 });
-    
-    return {
-      publicKey: forge.pki.publicKeyToPem(keypair.publicKey),
-      privateKey: forge.pki.privateKeyToPem(keypair.privateKey)
-    };
+    return new Promise((resolve, reject) => {
+      forge.pki.rsa.generateKeyPair({ bits: 2048 }, (err, keypair) => {
+        if (err) {
+          reject(new Error(`Eroare la generarea perechii de chei: ${err.message}`));
+        } else {
+          resolve({
+            publicKey: forge.pki.publicKeyToPem(keypair.publicKey),
+            privateKey: forge.pki.privateKeyToPem(keypair.privateKey)
+          });
+        }
+      });
+    });
   }
 
   /**

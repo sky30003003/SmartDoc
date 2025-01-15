@@ -1,65 +1,84 @@
-const ISignatureProvider = require('../interfaces/ISignatureProvider');
-const PDFManipulator = require('../utils/PDFManipulator');
-const CertificateManager = require('../utils/CertificateManager');
-const TimestampService = require('../utils/TimestampService');
-const SignatureInfo = require('../models/SignatureInfo');
-const SignatureMetadata = require('../models/SignatureMetadata');
+const { PDFDocument, PDFName, PDFString } = require('pdf-lib');
 const crypto = require('crypto');
+const PDFManipulator = require('../utils/PDFManipulator');
+
+// Opțiuni consistente pentru încărcarea și salvarea PDF-urilor
+const PDF_LOAD_OPTIONS = {
+  updateMetadata: false,
+  ignoreEncryption: true
+};
+
+const PDF_SAVE_OPTIONS = {
+  useObjectStreams: false,
+  addDefaultPage: false,
+  updateMetadata: false
+};
 
 /**
  * Implementare de bază pentru PAdES
  * Oferă funcționalități de semnare și verificare conform standardului PAdES-Basic
  */
-class BasicPAdESProvider extends ISignatureProvider {
-  constructor() {
-    super();
+class BasicPAdESProvider {
+  constructor(config = {}) {
+    this.config = {
+      validityYears: 5,
+      ...config
+    };
     this.initialized = false;
-    this.config = null;
+    this.manipulator = new PDFManipulator();
   }
 
   /**
-   * Inițializează furnizorul cu configurația necesară
-   * @param {Object} config - Configurația furnizorului
+   * Inițializează furnizorul
    */
-  async initialize(config) {
-    this.config = {
-      basePath: config.basePath || './certificates',
-      validityYears: config.validityYears || 5,
-      ...config
-    };
+  async initialize() {
     this.initialized = true;
   }
 
   /**
-   * Generează o pereche de chei pentru semnături digitale
-   * @returns {Promise<Object>} Obiect conținând cheile publică și privată
+   * Calculează hash-ul unui document PDF
+   * @param {PDFDocument|Buffer} source - Documentul PDF sau buffer-ul său
+   * @returns {Promise<string>} Hash-ul documentului
    */
-  async generateKeyPair() {
-    if (!this.initialized) {
-      throw new Error('Furnizorul nu a fost inițializat');
+  async calculateDocumentHash(source) {
+    try {
+      let pdfDoc;
+      
+      // Încărcăm PDF-ul pentru a normaliza conținutul
+      if (Buffer.isBuffer(source)) {
+        pdfDoc = await PDFDocument.load(source, PDF_LOAD_OPTIONS);
+      } else if (source instanceof PDFDocument) {
+        pdfDoc = await PDFDocument.load(await source.save(PDF_SAVE_OPTIONS), PDF_LOAD_OPTIONS);
+      } else {
+        throw new Error('Sursa invalidă pentru calcularea hash-ului');
+      }
+
+      // Ștergem toate metadatele pentru hash
+      pdfDoc.setTitle('');
+      pdfDoc.setAuthor('');
+      pdfDoc.setSubject('');
+      pdfDoc.setKeywords([]);
+      pdfDoc.setCreator('');
+      pdfDoc.setProducer('');
+      
+      if (pdfDoc.catalog.has(PDFName.of('Info'))) {
+        pdfDoc.catalog.delete(PDFName.of('Info'));
+      }
+      
+      if (pdfDoc.catalog.has(PDFName.of('Metadata'))) {
+        pdfDoc.catalog.delete(PDFName.of('Metadata'));
+      }
+
+      const pdfBytes = await pdfDoc.save(PDF_SAVE_OPTIONS);
+
+      return crypto
+        .createHash('sha256')
+        .update(pdfBytes)
+        .digest('hex');
+    } catch (error) {
+      console.error('Error calculating document hash:', error);
+      throw new Error(`Eroare la calcularea hash-ului: ${error.message}`);
     }
-
-    return await CertificateManager.generateKeyPair();
-  }
-
-  /**
-   * Generează un certificat digital pentru o cheie publică
-   * @param {Object} keyPair - Perechea de chei
-   * @param {Object} subjectInfo - Informații despre subiectul certificatului
-   * @param {Object} options - Opțiuni pentru generarea certificatului
-   * @returns {Promise<string>} Certificatul în format PEM
-   */
-  async generateCertificate(keyPair, subjectInfo, options = {}) {
-    if (!this.initialized) {
-      throw new Error('Furnizorul nu a fost inițializat');
-    }
-
-    const certificateOptions = {
-      validityYears: this.config.validityYears,
-      ...options
-    };
-
-    return await CertificateManager.generateCertificate(keyPair, subjectInfo, certificateOptions);
   }
 
   /**
@@ -67,7 +86,7 @@ class BasicPAdESProvider extends ISignatureProvider {
    * @param {Buffer} pdfBuffer - Conținutul documentului PDF
    * @param {Object} signatureInfo - Informații despre semnătură
    * @param {Object} options - Opțiuni pentru semnare
-   * @returns {Promise<Buffer>} Documentul PDF semnat
+   * @returns {Promise<Object>} Rezultatul semnării
    */
   async signPDF(pdfBuffer, signatureInfo, options = {}) {
     if (!this.initialized) {
@@ -75,63 +94,68 @@ class BasicPAdESProvider extends ISignatureProvider {
     }
 
     try {
-      // Încărcăm documentul PDF
-      const pdfDoc = await PDFManipulator.loadPDF(pdfBuffer);
+      console.log('=== Signing PDF Debug ===');
+      console.log('Input PDF size:', pdfBuffer.length);
 
-      // Calculăm hash-ul documentului original
-      const documentHash = crypto
-        .createHash('sha256')
-        .update(pdfBuffer)
-        .digest('hex');
+      // Încărcăm PDF-ul și calculăm hash-ul original
+      const pdfDoc = await PDFDocument.load(pdfBuffer, PDF_LOAD_OPTIONS);
+      const documentHash = await this.calculateDocumentHash(pdfBuffer);
+      console.log('Original document hash:', documentHash);
 
-      // Creăm informațiile despre semnătură
-      const signature = new SignatureInfo({
-        ...signatureInfo,
-        documentHash
-      });
-
-      // Validăm informațiile semnăturii
-      signature.validate();
-
-      // Adăugăm semnătura vizuală dacă este cerută
-      if (options.visualSignature) {
-        const visualPosition = await PDFManipulator.addVisualSignature(pdfDoc, signature, options);
-        signature.setVisualPosition(visualPosition);
-      }
-
-      // Generăm marca temporală
-      const timestamp = await TimestampService.generateTimestamp(documentHash);
-
-      // Creăm metadatele semnăturii
-      const metadata = new SignatureMetadata({
-        signatureType: 'PAdES-Basic',
-        signatureFormat: 'CAdES',
-        signatureLevel: 'B-B',
-        certificateInfo: {
-          subject: signatureInfo.signerName,
-          issuer: signatureInfo.organization,
-          validFrom: new Date(),
-          validTo: new Date(Date.now() + this.config.validityYears * 365 * 24 * 60 * 60 * 1000)
-        },
-        timestamps: [timestamp]
-      });
-
-      // Adăugăm metadatele în PDF
-      await PDFManipulator.addMetadata(pdfDoc, {
-        title: options.title || 'Document semnat digital',
-        author: signatureInfo.signerName,
+      // Adăugăm metadata
+      const metadata = {
+        title: signatureInfo.title || '',
+        author: signatureInfo.signerName || '',
         subject: 'Document semnat cu PAdES-Basic',
-        keywords: 'semnătură digitală, PAdES, SmartDoc',
+        keywords: ['semnătură digitală', 'PAdES', 'SmartDoc'],
+        creator: 'SmartDoc PAdES Signer',
+        producer: 'SmartDoc',
         signatures: [{
-          info: signature.toJSON(),
-          metadata: metadata.toJSON()
+          info: {
+            signatureId: signatureInfo.signatureId,
+            signerName: signatureInfo.signerName,
+            signerEmail: signatureInfo.signerEmail,
+            organization: signatureInfo.organization,
+            documentHash: documentHash,
+            timestamp: new Date().toISOString()
+          },
+          metadata: {
+            signatureType: signatureInfo.signatureType || 'PAdES-Basic',
+            timestamps: []
+          }
         }]
+      };
+
+      // Setăm metadata în document
+      await this.manipulator.addMetadata(pdfDoc, metadata);
+      
+      // Salvăm documentul final cu opțiuni de salvare pentru metadata
+      const pdfBytes = await pdfDoc.save({ ...PDF_SAVE_OPTIONS, updateMetadata: true });
+      const signedBuffer = Buffer.from(pdfBytes);
+
+      // Verificăm starea finală
+      const verifyDoc = await PDFDocument.load(signedBuffer, PDF_LOAD_OPTIONS);
+      const savedMetadata = await this.manipulator.extractMetadata(verifyDoc);
+      const finalHash = await this.calculateDocumentHash(signedBuffer);
+      
+      console.log('Final document state:', {
+        originalHash: documentHash,
+        finalHash,
+        match: documentHash === finalHash,
+        size: signedBuffer.length,
+        hasSignatures: !!savedMetadata.signatures,
+        storedHash: savedMetadata.signatures?.[0]?.info?.documentHash
       });
 
-      // Salvăm documentul modificat
-      return await PDFManipulator.savePDF(pdfDoc);
+      return {
+        pdfBytes: signedBuffer,
+        documentHash,
+        metadata: savedMetadata
+      };
+
     } catch (error) {
-      throw new Error(`Eroare la semnarea documentului: ${error.message}`);
+      console.error('Error signing PDF:', error);
+      throw new Error(`Eroare la semnarea PDF-ului: ${error.message}`);
     }
   }
 
@@ -147,145 +171,69 @@ class BasicPAdESProvider extends ISignatureProvider {
 
     try {
       // Încărcăm documentul PDF
-      const pdfDoc = await PDFManipulator.loadPDF(pdfBuffer);
-
+      const pdfDoc = await PDFDocument.load(pdfBuffer, PDF_LOAD_OPTIONS);
+      
       // Extragem metadatele
-      const metadata = await PDFManipulator.extractMetadata(pdfDoc);
+      const metadata = await this.manipulator.extractMetadata(pdfDoc);
+
+      // Calculăm hash-ul curent al documentului
+      const currentHash = await this.calculateDocumentHash(pdfBuffer);
+
+      console.log('Verificare semnături:', {
+        totalSignatures: metadata.signatures?.length || 0,
+        currentHash,
+        metadata: JSON.stringify(metadata, null, 2)
+      });
 
       // Verificăm fiecare semnătură
       const verificationResults = await Promise.all(
         (metadata.signatures || []).map(async (signature) => {
-          try {
-            // Verificăm hash-ul documentului
-            const currentHash = crypto
-              .createHash('sha256')
-              .update(pdfBuffer)
-              .digest('hex');
+          const { info } = signature;
+          
+          console.log('Verificare semnătură:', {
+            id: info.signatureId,
+            storedHash: info.documentHash,
+            currentHash,
+            timestamp: info.timestamp
+          });
 
-            const isHashValid = currentHash === signature.info.documentHash;
+          // Verificăm hash-ul documentului
+          const isHashValid = info.documentHash === currentHash;
 
-            // Verificăm marca temporală
-            const timestampVerification = await TimestampService.verifyTimestamp(
-              signature.metadata.timestamps[0],
-              signature.info.documentHash
-            );
-
-            return {
-              signatureId: signature.info.signatureId,
-              signerInfo: {
-                name: signature.info.signerName,
-                email: signature.info.signerEmail,
-                organization: signature.info.organization
-              },
-              isValid: isHashValid && timestampVerification.isValid,
-              documentHash: signature.info.documentHash,
-              currentHash,
-              timestamp: timestampVerification.isValid ? signature.metadata.timestamps[0] : null,
-              errors: [
-                ...(isHashValid ? [] : ['Documentul a fost modificat după semnare']),
-                ...(timestampVerification.isValid ? [] : ['Marca temporală nu este validă'])
-              ]
-            };
-          } catch (error) {
-            return {
-              signatureId: signature.info.signatureId,
-              signerInfo: {
-                name: signature.info.signerName,
-                email: signature.info.signerEmail,
-                organization: signature.info.organization
-              },
-              isValid: false,
-              errors: [`Eroare la verificarea semnăturii: ${error.message}`]
-            };
+          // Convertim timestamp-ul în Date dacă este string
+          let timestamp = null;
+          if (info.timestamp) {
+            timestamp = typeof info.timestamp === 'string' 
+              ? new Date(info.timestamp)
+              : info.timestamp;
           }
+
+          // Verificăm validitatea timestamp-ului
+          const isTimestampValid = timestamp instanceof Date && !isNaN(timestamp);
+
+          return {
+            signatureId: info.signatureId,
+            signerInfo: {
+              name: info.signerName,
+              email: info.signerEmail,
+              organization: info.organization
+            },
+            isValid: isHashValid && isTimestampValid,
+            documentHash: info.documentHash,
+            currentHash: currentHash,
+            timestamp: isTimestampValid ? timestamp.toISOString() : null,
+            errors: [
+              ...(!isHashValid ? ['Documentul a fost modificat după semnare'] : []),
+              ...(!isTimestampValid ? ['Marca temporală nu este validă'] : [])
+            ]
+          };
         })
       );
 
       return verificationResults;
     } catch (error) {
+      console.error('Error verifying signatures:', error);
       throw new Error(`Eroare la verificarea semnăturilor: ${error.message}`);
-    }
-  }
-
-  /**
-   * Adaugă o marcă temporală la o semnătură
-   * @param {Buffer} pdfBuffer - Conținutul documentului PDF
-   * @param {string} signatureId - Identificatorul semnăturii
-   * @returns {Promise<Buffer>} Documentul PDF cu marca temporală adăugată
-   */
-  async addTimestamp(pdfBuffer, signatureId) {
-    if (!this.initialized) {
-      throw new Error('Furnizorul nu a fost inițializat');
-    }
-
-    try {
-      // Încărcăm documentul PDF
-      const pdfDoc = await PDFManipulator.loadPDF(pdfBuffer);
-
-      // Extragem metadatele
-      const metadata = await PDFManipulator.extractMetadata(pdfDoc);
-
-      // Găsim semnătura
-      const signatureIndex = metadata.signatures.findIndex(s => s.info.signatureId === signatureId);
-      if (signatureIndex === -1) {
-        throw new Error('Semnătura nu a fost găsită');
-      }
-
-      // Generăm o nouă marcă temporală
-      const timestamp = await TimestampService.generateTimestamp(
-        metadata.signatures[signatureIndex].info.documentHash
-      );
-
-      // Adăugăm marca temporală la semnătură
-      metadata.signatures[signatureIndex].metadata.timestamps.push(timestamp);
-
-      // Actualizăm metadatele în PDF
-      await PDFManipulator.addMetadata(pdfDoc, metadata);
-
-      // Salvăm documentul modificat
-      return await PDFManipulator.savePDF(pdfDoc);
-    } catch (error) {
-      throw new Error(`Eroare la adăugarea mărcii temporale: ${error.message}`);
-    }
-  }
-
-  /**
-   * Verifică validitatea unui certificat
-   * @param {string} certificatePem - Certificatul în format PEM
-   * @returns {Promise<Object>} Informații despre validitatea certificatului
-   */
-  async verifyCertificate(certificatePem) {
-    if (!this.initialized) {
-      throw new Error('Furnizorul nu a fost inițializat');
-    }
-
-    return await CertificateManager.verifyCertificate(certificatePem);
-  }
-
-  /**
-   * Extrage informații despre semnături dintr-un document PDF
-   * @param {Buffer} pdfBuffer - Conținutul documentului PDF
-   * @returns {Promise<Array>} Lista de informații despre semnături
-   */
-  async extractSignatureInfo(pdfBuffer) {
-    if (!this.initialized) {
-      throw new Error('Furnizorul nu a fost inițializat');
-    }
-
-    try {
-      // Încărcăm documentul PDF
-      const pdfDoc = await PDFManipulator.loadPDF(pdfBuffer);
-
-      // Extragem metadatele
-      const metadata = await PDFManipulator.extractMetadata(pdfDoc);
-
-      // Returnăm informațiile despre semnături
-      return (metadata.signatures || []).map(signature => ({
-        info: SignatureInfo.fromJSON(signature.info),
-        metadata: SignatureMetadata.fromJSON(signature.metadata)
-      }));
-    } catch (error) {
-      throw new Error(`Eroare la extragerea informațiilor despre semnături: ${error.message}`);
     }
   }
 }

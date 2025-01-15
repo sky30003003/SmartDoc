@@ -14,11 +14,18 @@ class CertificateManager {
    */
   static async generateKeyPair(options = { bits: 2048 }) {
     try {
-      const keypair = forge.pki.rsa.generateKeyPair(options);
-      return {
-        publicKey: forge.pki.publicKeyToPem(keypair.publicKey),
-        privateKey: forge.pki.privateKeyToPem(keypair.privateKey)
-      };
+      return new Promise((resolve, reject) => {
+        forge.pki.rsa.generateKeyPair(options, (err, keypair) => {
+          if (err) {
+            reject(new Error(`Eroare la generarea perechii de chei: ${err.message}`));
+          } else {
+            resolve({
+              publicKey: forge.pki.publicKeyToPem(keypair.publicKey),
+              privateKey: forge.pki.privateKeyToPem(keypair.privateKey)
+            });
+          }
+        });
+      });
     } catch (error) {
       throw new Error(`Eroare la generarea perechii de chei: ${error.message}`);
     }

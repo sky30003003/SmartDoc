@@ -25,6 +25,16 @@ const employeeSchema = new mongoose.Schema({
     ref: 'Organization',
     required: true
   },
+  role: {
+    type: String,
+    enum: ['org_admin', 'employee'],
+    required: true
+  },
+  status: {
+    type: String,
+    enum: ['active', 'inactive'],
+    default: 'active'
+  },
   // Câmpuri pentru semnătura electronică avansată
   digitalSignature: {
     publicKey: String,      // Cheia publică în format PEM

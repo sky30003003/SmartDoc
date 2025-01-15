@@ -1,174 +1,120 @@
 const BasicPAdESProvider = require('./providers/BasicPAdESProvider');
-const SignatureInfo = require('./models/SignatureInfo');
+const fs = require('fs').promises;
 
-/**
- * Serviciu principal pentru semnături PAdES
- * Coordonează toate componentele și oferă o interfață unificată pentru semnături
- */
 class PAdESService {
-  constructor() {
-    this.provider = null;
-    this.config = null;
+  constructor(config = {}) {
+    this.provider = new BasicPAdESProvider(config);
+    this.initialized = false;
   }
 
   /**
-   * Inițializează serviciul cu un furnizor și configurație
-   * @param {Object} config - Configurația serviciului
+   * Inițializează serviciul
    */
-  async initialize(config = {}) {
-    try {
-      // Inițializăm furnizorul de bază pentru PAdES
-      this.provider = new BasicPAdESProvider();
-      await this.provider.initialize(config);
-      
-      this.config = {
-        basePath: config.basePath || './certificates',
-        validityYears: config.validityYears || 5,
-        visualSignature: config.visualSignature !== false,
-        includeQR: config.includeQR !== false,
-        ...config
-      };
-
-      return true;
-    } catch (error) {
-      throw new Error(`Eroare la inițializarea serviciului PAdES: ${error.message}`);
-    }
-  }
-
-  /**
-   * Generează chei și certificat pentru un semnatar
-   * @param {Object} signerInfo - Informații despre semnatar
-   * @returns {Promise<Object>} Cheile și certificatul generate
-   */
-  async generateSignerCredentials(signerInfo) {
-    try {
-      // Generăm perechea de chei
-      const keyPair = await this.provider.generateKeyPair();
-
-      // Generăm certificatul
-      const certificate = await this.provider.generateCertificate(keyPair, signerInfo, {
-        validityYears: this.config.validityYears
-      });
-
-      return {
-        keyPair,
-        certificate
-      };
-    } catch (error) {
-      throw new Error(`Eroare la generarea credențialelor: ${error.message}`);
+  async initialize() {
+    if (!this.initialized) {
+      await this.provider.initialize();
+      this.initialized = true;
     }
   }
 
   /**
    * Semnează un document PDF
-   * @param {Buffer} pdfBuffer - Conținutul documentului PDF
-   * @param {Object} signerInfo - Informații despre semnatar
-   * @param {Object} options - Opțiuni pentru semnare
-   * @returns {Promise<Object>} Documentul semnat și informații despre semnătură
+   * @param {Buffer|Object} input - Buffer-ul PDF sau parametrii pentru semnare
+   * @param {Object} signatureInfo - Informații despre semnătură (dacă input e Buffer)
+   * @param {Object} options - Opțiuni pentru semnare (dacă input e Buffer)
+   * @returns {Promise<Object>} Rezultatul semnării
    */
-  async signDocument(pdfBuffer, signerInfo, options = {}) {
-    try {
-      // Creăm informațiile despre semnătură
-      const signatureInfo = new SignatureInfo({
-        signerId: signerInfo.id,
-        signerName: `${signerInfo.firstName} ${signerInfo.lastName}`,
-        signerEmail: signerInfo.email,
-        organization: signerInfo.organization
-      });
+  async signDocument(input, signatureInfo, options = {}) {
+    if (!this.initialized) {
+      await this.initialize();
+    }
 
-      // Configurăm opțiunile de semnare
-      const signOptions = {
-        visualSignature: this.config.visualSignature,
-        includeQR: this.config.includeQR,
-        title: options.title,
-        ...options
-      };
+    try {
+      console.log('=== PAdESService.signDocument Debug ===');
+      
+      let pdfBuffer;
+      
+      // Verificăm dacă input este un Buffer sau un obiect cu parametri
+      if (Buffer.isBuffer(input)) {
+        pdfBuffer = input;
+        console.log('Using provided PDF buffer, size:', pdfBuffer.length);
+      } else {
+        const { inputPath } = input;
+        // Verificăm existența fișierului
+        try {
+          await fs.access(inputPath);
+        } catch (error) {
+          throw new Error(`Documentul nu a fost găsit la calea specificată: ${inputPath}`);
+        }
+
+        // Citim documentul PDF
+        pdfBuffer = await fs.readFile(inputPath);
+        console.log('PDF loaded from file, size:', pdfBuffer.length);
+        
+        // Folosim signatureInfo și options din obiectul input dacă nu sunt furnizate separat
+        signatureInfo = input.signatureInfo || signatureInfo;
+        options = input.options || options;
+      }
 
       // Semnăm documentul
-      const signedPdfBuffer = await this.provider.signPDF(pdfBuffer, signatureInfo, signOptions);
+      const result = await this.provider.signPDF(pdfBuffer, signatureInfo, options);
+      console.log('Document signed successfully');
 
-      // Extragem informațiile despre semnătură
-      const signatures = await this.provider.extractSignatureInfo(signedPdfBuffer);
-      const lastSignature = signatures[signatures.length - 1];
+      // Dacă avem outputPath în input, salvăm documentul
+      if (!Buffer.isBuffer(input) && input.outputPath) {
+        await fs.writeFile(input.outputPath, result.pdfBytes);
+        console.log('Signed document saved to:', input.outputPath);
+      }
 
-      return {
-        document: signedPdfBuffer,
-        signature: lastSignature
-      };
+      return result;
     } catch (error) {
+      console.error('Error in PAdESService.signDocument:', error);
       throw new Error(`Eroare la semnarea documentului: ${error.message}`);
     }
   }
 
   /**
-   * Verifică semnăturile unui document
-   * @param {Buffer} pdfBuffer - Conținutul documentului PDF
+   * Verifică semnăturile dintr-un document PDF
+   * @param {Buffer|string} input - Buffer-ul PDF sau calea către documentul PDF
    * @returns {Promise<Array>} Lista de semnături cu statusul lor
    */
-  async verifyDocument(pdfBuffer) {
-    try {
-      return await this.provider.verifySignatures(pdfBuffer);
-    } catch (error) {
-      throw new Error(`Eroare la verificarea documentului: ${error.message}`);
+  async verifySignatures(input) {
+    if (!this.initialized) {
+      await this.initialize();
     }
-  }
 
-  /**
-   * Adaugă o marcă temporală la o semnătură existentă
-   * @param {Buffer} pdfBuffer - Conținutul documentului PDF
-   * @param {string} signatureId - Identificatorul semnăturii
-   * @returns {Promise<Buffer>} Documentul cu marca temporală adăugată
-   */
-  async addTimestamp(pdfBuffer, signatureId) {
     try {
-      return await this.provider.addTimestamp(pdfBuffer, signatureId);
+      console.log('=== PAdESService.verifySignatures Debug ===');
+      
+      let pdfBuffer;
+      
+      if (Buffer.isBuffer(input)) {
+        pdfBuffer = input;
+        console.log('Using provided PDF buffer, size:', pdfBuffer.length);
+      } else {
+        console.log('Verifying signatures for:', input);
+        // Verificăm existența fișierului
+        try {
+          await fs.access(input);
+        } catch (error) {
+          throw new Error(`Documentul nu a fost găsit la calea specificată: ${input}`);
+        }
+
+        // Citim documentul PDF
+        pdfBuffer = await fs.readFile(input);
+        console.log('PDF loaded from file, size:', pdfBuffer.length);
+      }
+
+      // Verificăm semnăturile
+      const results = await this.provider.verifySignatures(pdfBuffer);
+      console.log('Verification results:', JSON.stringify(results, null, 2));
+
+      return results;
     } catch (error) {
-      throw new Error(`Eroare la adăugarea mărcii temporale: ${error.message}`);
+      console.error('Error in PAdESService.verifySignatures:', error);
+      throw new Error(`Eroare la verificarea semnăturilor: ${error.message}`);
     }
-  }
-
-  /**
-   * Verifică validitatea unui certificat
-   * @param {string} certificatePem - Certificatul în format PEM
-   * @returns {Promise<Object>} Informații despre validitatea certificatului
-   */
-  async verifyCertificate(certificatePem) {
-    try {
-      return await this.provider.verifyCertificate(certificatePem);
-    } catch (error) {
-      throw new Error(`Eroare la verificarea certificatului: ${error.message}`);
-    }
-  }
-
-  /**
-   * Extrage informații despre semnături dintr-un document
-   * @param {Buffer} pdfBuffer - Conținutul documentului PDF
-   * @returns {Promise<Array>} Lista de informații despre semnături
-   */
-  async getSignatureInfo(pdfBuffer) {
-    try {
-      return await this.provider.extractSignatureInfo(pdfBuffer);
-    } catch (error) {
-      throw new Error(`Eroare la extragerea informațiilor despre semnături: ${error.message}`);
-    }
-  }
-
-  /**
-   * Verifică dacă serviciul este inițializat
-   * @returns {boolean} True dacă serviciul este inițializat
-   */
-  isInitialized() {
-    return this.provider !== null && this.config !== null;
-  }
-
-  /**
-   * Obține configurația curentă
-   * @returns {Object} Configurația serviciului
-   */
-  getConfig() {
-    return { ...this.config };
   }
 }
 
-// Exportăm o singură instanță a serviciului (Singleton)
-module.exports = new PAdESService(); 
+module.exports = PAdESService; 

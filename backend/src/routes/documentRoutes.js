@@ -1,21 +1,26 @@
 const express = require('express');
 const router = express.Router();
 const { authenticateToken } = require('../middleware/auth');
-const { getAllDocuments, uploadDocument, deleteDocument, downloadDocument, sendToSign, getSigningDetails, signDocument, downloadDocumentForSigning, verifySignature, bulkDelete } = require('../controllers/documentController');
+const { getAllDocuments, uploadDocument, deleteDocument, downloadDocument, sendToSign, getSigningDetails, signDocument, downloadDocumentForSigning, verifySignature, bulkDelete, signDocumentAsAdmin } = require('../controllers/documentController');
 
-router.get('/', authenticateToken, getAllDocuments);
-router.post('/', authenticateToken, uploadDocument);
-router.delete('/:id', authenticateToken, deleteDocument);
-router.get('/download/:id', authenticateToken, downloadDocument);
-router.post('/:id/send-to-sign', authenticateToken, sendToSign);
-router.post('/bulk-delete', authenticateToken, bulkDelete);
-
-// Rute publice pentru semnarea documentelor
+// Rute publice pentru semnarea documentelor (nu necesită autentificare)
 router.get('/:id/sign/:employeeId/details', getSigningDetails);
 router.post('/:id/sign/:employeeId', signDocument);
 router.get('/:id/sign/:employeeId/download', downloadDocumentForSigning);
 
+// Rute protejate (necesită autentificare)
+router.use(authenticateToken);
+
+// Rute pentru documente
+router.get('/', getAllDocuments);
+router.post('/', uploadDocument);
+router.delete('/:id', deleteDocument);
+router.get('/download/:id', downloadDocument);
+router.post('/:id/send-to-sign', sendToSign);
+router.post('/bulk-delete', bulkDelete);
+router.post('/:id/sign-admin', signDocumentAsAdmin);
+
 // Rută pentru verificarea semnăturii
-router.get('/:id/verify/:signatureId', authenticateToken, verifySignature);
+router.get('/:id/verify/:signatureId', verifySignature);
 
 module.exports = router; 

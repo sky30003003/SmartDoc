@@ -7,13 +7,13 @@ export const AuthProvider = ({ children }) => {
   const [currentUser, setCurrentUser] = useState(null);
   const [organizationName, setOrganizationName] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [token, setToken] = useState(localStorage.getItem('token'));
 
-  const login = async (token, userData) => {
+  const login = async (newToken, userData) => {
     try {
       console.log('AuthContext: Setting token and user data');
-      console.log('Token:', token);
-      console.log('User data:', userData);
-      localStorage.setItem('token', token);
+      localStorage.setItem('token', newToken);
+      setToken(newToken);
       setCurrentUser(() => userData);
       setOrganizationName(userData.organizationName);
       console.log('AuthContext: Current user updated');
@@ -25,6 +25,7 @@ export const AuthProvider = ({ children }) => {
 
   const logout = () => {
     localStorage.removeItem('token');
+    setToken(null);
     setCurrentUser(null);
     setOrganizationName(null);
   };
@@ -32,15 +33,16 @@ export const AuthProvider = ({ children }) => {
   useEffect(() => {
     const verifyToken = async () => {
       try {
-        const token = localStorage.getItem('token');
-        if (!token) {
+        const storedToken = localStorage.getItem('token');
+        if (!storedToken) {
           setLoading(false);
           return;
         }
 
+        setToken(storedToken);
         const response = await fetch(`${process.env.REACT_APP_API_URL}/api/auth/verify`, {
           headers: {
-            'Authorization': `Bearer ${token}`
+            'Authorization': `Bearer ${storedToken}`
           }
         });
 
@@ -54,6 +56,7 @@ export const AuthProvider = ({ children }) => {
       } catch (error) {
         console.error('Token verification error:', error);
         localStorage.removeItem('token');
+        setToken(null);
         setCurrentUser(null);
         setOrganizationName(null);
       } finally {
@@ -73,7 +76,8 @@ export const AuthProvider = ({ children }) => {
     login,
     logout,
     loading,
-    organizationName
+    organizationName,
+    token
   };
 
   return (

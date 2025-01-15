@@ -22,14 +22,13 @@ import {
   CircularProgress,
   Tooltip,
   Stack,
-  Chip,
   List,
   ListItem,
   ListItemText,
   Checkbox,
   ListItemIcon,
-  ListItemSecondaryAction,
-  LinearProgress
+  LinearProgress,
+  FormControlLabel
 } from '@mui/material';
 import {
   Delete as DeleteIcon,
@@ -37,9 +36,6 @@ import {
   Download as DownloadIcon,
   Send as SendIcon,
   Info as InfoIcon,
-  VerifiedUser as VerifiedUserIcon,
-  Error as ErrorIcon,
-  Visibility as VisibilityIcon,
   Circle as CircleIcon,
   AdminPanelSettings as AdminPanelSettingsIcon,
   Group as GroupIcon,
@@ -48,7 +44,9 @@ import {
   ExpandLess as ExpandLessIcon,
   CheckCircle as CheckCircleIcon,
   RotateRight as RotateRightIcon,
-  DoneAll as DoneAllIcon
+  DoneAll as DoneAllIcon,
+  VerifiedUser as VerifiedUserIcon,
+  Error as ErrorIcon
 } from '@mui/icons-material';
 import { useSnackbar } from 'notistack';
 import OrgAdminPageHeader from '../common/OrgAdminPageHeader';
@@ -58,11 +56,10 @@ import SignatureStatusDialog from './SignatureStatusDialog';
 import DocumentViewer from './DocumentViewer';
 
 const DocumentManagement = () => {
-  const { currentUser, organizationName } = useAuth();
-  const { verifySignature, getVerificationResult, clearVerificationData } = useSignature();
+  const { currentUser, organizationName, token } = useAuth();
+  const { verifySignature } = useSignature();
   const { enqueueSnackbar } = useSnackbar();
   const [documents, setDocuments] = useState([]);
-  const [employees, setEmployees] = useState([]);
   const [selectedDocuments, setSelectedDocuments] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -81,23 +78,19 @@ const DocumentManagement = () => {
     title: '',
     file: null,
     requiredSignatures: [
-      { role: 'admin', order: null, required: false },
-      { role: 'collaborator', order: null, required: false },
-      { role: 'employee', order: null, required: false }
+      { role: 'org_admin', order: 1, required: false },
+      { role: 'employee', order: 2, required: false },
+      { role: 'collaborator', order: 3, required: false }
     ]
   });
-  const [downloading, setDownloading] = useState(false);
   const [sendToSignDialog, setSendToSignDialog] = useState({
     open: false,
     document: null
   });
   const [successMessage, setSuccessMessage] = useState(null);
   const [statusDialog, setStatusDialog] = useState({ open: false, document: null });
-  const [signatureStatuses, setSignatureStatuses] = useState({});
   const [verifyDialog, setVerifyDialog] = useState({ open: false, document: null });
   const [verificationResult, setVerificationResult] = useState(null);
-  const token = localStorage.getItem('token');
-  const [loadingSignatures, setLoadingSignatures] = useState(false);
   const [viewDialog, setViewDialog] = useState({
     open: false,
     document: null,
@@ -108,11 +101,15 @@ const DocumentManagement = () => {
   const [infoDialog, setInfoDialog] = useState(false);
   const [expandedCategories, setExpandedCategories] = useState({});
   const [allExpanded, setAllExpanded] = useState(false);
+  const [adminSignDialog, setAdminSignDialog] = useState({
+    open: false,
+    document: null
+  });
 
   // Helper function to get role name
   const getRoleName = (role) => {
     switch (role) {
-      case 'admin':
+      case 'org_admin':
         return 'Administrator';
       case 'collaborator':
         return 'Colaborator';
@@ -124,9 +121,13 @@ const DocumentManagement = () => {
   };
 
   useEffect(() => {
+    if (!token) {
+      console.error('No authentication token available');
+      setError('Nu sunteți autentificat');
+      return;
+    }
     fetchDocuments();
-    fetchEmployees();
-  }, []);
+  }, [token]);
 
   useEffect(() => {
     if (successMessage) {
@@ -139,57 +140,47 @@ const DocumentManagement = () => {
 
   const fetchDocuments = async () => {
     try {
-      const token = localStorage.getItem('token');
+      if (!token) {
+        throw new Error('Nu sunteți autentificat');
+      }
+
+      console.log('Fetching documents with token:', token ? 'Token exists' : 'No token');
+      
       const response = await fetch(`${process.env.REACT_APP_API_URL}/api/documents`, {
         headers: {
-          'Authorization': `Bearer ${token}`
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
         }
       });
+
+      if (response.status === 401) {
+        throw new Error('Sesiunea a expirat. Vă rugăm să vă autentificați din nou.');
+      }
+
+      if (response.status === 403) {
+        throw new Error('Nu aveți permisiunea de a accesa documentele');
+      }
 
       if (!response.ok) {
         throw new Error('Eroare la obținerea documentelor');
       }
 
       const data = await response.json();
-      console.log('=== Response from /api/documents ===');
-      console.log('All documents:', data);
-      data.forEach(doc => {
-        console.log(`Document ${doc._id}:`, {
-          title: doc.title,
-          signatureConfig: doc.signatureConfig,
-          employeeCopies: doc.employeeCopies
-        });
-      });
-      console.log('================================');
-      
+      console.log('Documents fetched successfully:', data);
       setError(null);
       setDocuments(data);
     } catch (error) {
+      console.error('Error fetching documents:', error);
       setError(error.message);
       setDocuments([]);
+      enqueueSnackbar(error.message, { variant: 'error' });
+      
+      if (error.message.includes('Sesiunea a expirat')) {
+        // Redirecționăm către pagina de login
+        window.location.href = '/login';
+      }
     } finally {
       setLoading(false);
-    }
-  };
-
-  const fetchEmployees = async () => {
-    try {
-      const token = localStorage.getItem('token');
-      const response = await fetch(`${process.env.REACT_APP_API_URL}/api/employees`, {
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
-      });
-
-      if (!response.ok) {
-        throw new Error('Eroare la obținerea angajaților');
-      }
-
-      const data = await response.json();
-      setEmployees(data);
-    } catch (error) {
-      console.error('Error fetching employees:', error);
-      setEmployees([]);
     }
   };
 
@@ -197,80 +188,73 @@ const DocumentManagement = () => {
     setOpenUploadDialog(false);
     setUploadError(null);
     setUploadData({ title: '', file: null, requiredSignatures: [
-      { role: 'admin', order: null, required: false },
-      { role: 'collaborator', order: null, required: false },
-      { role: 'employee', order: null, required: false }
+      { role: 'org_admin', order: 1, required: false },
+      { role: 'employee', order: 2, required: false },
+      { role: 'collaborator', order: 3, required: false }
     ] });
   };
 
   const handleUpload = async (e) => {
     e.preventDefault();
-    if (!uploadData.file || !uploadData.title) {
-      setUploadError('Titlul și fișierul sunt obligatorii');
+    if (!uploadData.file) {
+      setUploadError('Vă rugăm să selectați un fișier');
       return;
     }
 
-    try {
-      const formData = new FormData();
-      formData.append('file', uploadData.file);
-      formData.append('title', uploadData.title);
-      
-      // Adăugăm configurația semnăturilor
-      const signatureConfig = uploadData.requiredSignatures
-        .filter(sig => sig.required)
-        .sort((a, b) => a.order - b.order)
-        .map(sig => ({
-          role: sig.role,
-          order: sig.order
-        }));
-      
-      // Dacă nu sunt semnături selectate, trimitem un array gol
-      formData.append('signatureConfig', JSON.stringify(signatureConfig));
+    const formData = new FormData();
+    formData.append('file', uploadData.file);
+    formData.append('title', uploadData.title);
+    
+    // Adăugăm doar semnăturile care sunt marcate ca necesare și le sortăm după ordine
+    const requiredSignatures = uploadData.requiredSignatures
+      .filter(sig => sig.required)
+      .sort((a, b) => a.order - b.order)
+      .map(sig => ({
+        role: sig.role,
+        order: sig.order
+      }));
+    
+    // Verificăm dacă avem cel puțin o semnătură configurată
+    if (requiredSignatures.length === 0) {
+      setUploadError('Vă rugăm să selectați cel puțin o semnătură necesară');
+      return;
+    }
+    
+    console.log('Sending signature config:', JSON.stringify(requiredSignatures));
+    formData.append('signatureConfig', JSON.stringify(requiredSignatures));
 
-      const token = localStorage.getItem('token');
+    try {
+      console.log('Uploading document with token:', token ? 'Token exists' : 'No token');
       const response = await fetch(`${process.env.REACT_APP_API_URL}/api/documents`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`
+          // Nu setăm Content-Type pentru că FormData setează automat cu boundary corect
         },
         body: formData
       });
 
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.message || 'Eroare la încărcarea documentului');
+      const contentType = response.headers.get('content-type');
+      let data;
+      
+      if (contentType && contentType.includes('application/json')) {
+        data = await response.json();
+      } else {
+        const text = await response.text();
+        console.error('Server response:', text);
+        throw new Error('Răspuns neașteptat de la server');
       }
 
-      const document = await response.json();
-      setDocuments([document, ...documents]);
+      if (!response.ok) {
+        throw new Error(data.message || 'Eroare la încărcarea documentului');
+      }
+
+      enqueueSnackbar('Document încărcat cu succes', { variant: 'success' });
       handleCloseUploadDialog();
-      
-      // Mesaj de succes cu configurare specifică pentru vizibilitate
-      const successMessage = signatureConfig.length > 0 
-        ? `Documentul a fost încărcat cu succes și necesită ${signatureConfig.length} ${signatureConfig.length === 1 ? 'semnătură' : 'semnături'}`
-        : 'Documentul a fost încărcat cu succes și nu necesită semnături';
-        
-      enqueueSnackbar(successMessage, {
-        variant: 'success',
-        anchorOrigin: {
-          vertical: 'top',
-          horizontal: 'center'
-        },
-        autoHideDuration: 5000,
-        preventDuplicate: true
-      });
+      fetchDocuments();
     } catch (error) {
+      console.error('Upload error:', error);
       setUploadError(error.message);
-      // Mesaj de eroare cu configurare specifică pentru vizibilitate
-      enqueueSnackbar(error.message, {
-        variant: 'error',
-        anchorOrigin: {
-          vertical: 'top',
-          horizontal: 'center'
-        },
-        autoHideDuration: 5000,
-        preventDuplicate: true
-      });
     }
   };
 
@@ -295,14 +279,6 @@ const DocumentManagement = () => {
     }
   };
 
-  const handleDeleteClick = (document) => {
-    setDeleteDialog({
-      open: true,
-      document: document,
-      isBulk: false
-    });
-  };
-
   const handleBulkDeleteClick = () => {
     setDeleteDialog({
       open: true,
@@ -321,7 +297,6 @@ const DocumentManagement = () => {
 
   const handleDelete = async (id) => {
     try {
-      const token = localStorage.getItem('token');
       const response = await fetch(`${process.env.REACT_APP_API_URL}/api/documents/${id}`, {
         method: 'DELETE',
         headers: {
@@ -344,13 +319,14 @@ const DocumentManagement = () => {
 
   const handleDownload = async (doc) => {
     try {
-      setDownloading(true);
-      const token = localStorage.getItem('token');
-      const response = await fetch(`${process.env.REACT_APP_API_URL}/api/documents/download/${doc._id}`, {
-        headers: {
-          'Authorization': `Bearer ${token}`
+      const response = await fetch(
+        `${process.env.REACT_APP_API_URL}/api/documents/${doc._id}/download`,
+        {
+          headers: {
+            'Authorization': `Bearer ${token}`
+          }
         }
-      });
+      );
 
       if (!response.ok) {
         throw new Error('Eroare la descărcarea documentului');
@@ -361,19 +337,46 @@ const DocumentManagement = () => {
       const a = document.createElement('a');
       a.href = url;
       a.download = doc.originalName;
+      document.body.appendChild(a);
       a.click();
       window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+      enqueueSnackbar('Document descărcat cu succes', { variant: 'success' });
     } catch (error) {
-      setError('Eroare la descărcarea documentului');
-      console.error('Download error:', error);
-    } finally {
-      setDownloading(false);
+      console.error('Error downloading document:', error);
+      enqueueSnackbar(error.message, { variant: 'error' });
     }
   };
 
   const handleSendToSign = async (documentId) => {
+    // Verificăm dacă documentul există în state
+    const document = documents.find(doc => doc._id === documentId);
+    if (!document) {
+      enqueueSnackbar('Document negăsit', { variant: 'error' });
+      return;
+    }
+
+    // Verificăm dacă este cazul special pentru admin
+    const isFirstSignerAdmin = document.signatureConfig?.[0]?.role === 'org_admin';
+    const isFirstStep = !document.signatureProgress?.currentStep || document.signatureProgress.currentStep === 0;
+
+    if (isFirstSignerAdmin && isFirstStep && currentUser.role === 'org_admin') {
+      // Dacă admin e primul, deschidem dialogul de semnare
+      setAdminSignDialog({
+        open: true,
+        document
+      });
+      setSendToSignDialog({ open: false, document: null });
+      return;
+    }
+
+    // Verificăm dacă documentul are semnături configurate
+    if (!document.signatureConfig || document.signatureConfig.length === 0) {
+      enqueueSnackbar('Documentul nu are configurate semnături', { variant: 'error' });
+      return;
+    }
+
     try {
-      const token = localStorage.getItem('token');
       const response = await fetch(`${process.env.REACT_APP_API_URL}/api/documents/${documentId}/send-to-sign`, {
         method: 'POST',
         headers: {
@@ -383,39 +386,27 @@ const DocumentManagement = () => {
       });
 
       if (!response.ok) {
-        throw new Error('Eroare la trimiterea documentului spre semnare');
+        const errorData = await response.json();
+        throw new Error(errorData.message || 'Eroare la trimiterea documentului spre semnare');
       }
 
       const result = await response.json();
-      setSuccessMessage(`Documentul a fost trimis spre semnare la ${result.sentCount} angajați`);
+      
+      if (result.sentCount === 0) {
+        enqueueSnackbar('Nu există semnatari disponibili pentru acest document', { variant: 'warning' });
+      } else {
+        setSuccessMessage(`Documentul a fost trimis spre semnare la ${result.sentCount} angajați`);
+      }
+      
       setSendToSignDialog({ open: false, document: null });
+      await fetchDocuments();
 
-      // Reîmprospătăm lista de documente
-      const updatedDocumentsResponse = await fetch(`${process.env.REACT_APP_API_URL}/api/documents`, {
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
-      });
-
-      if (!updatedDocumentsResponse.ok) {
-        throw new Error('Eroare la obținerea documentelor actualizate');
-      }
-
-      const updatedDocuments = await updatedDocumentsResponse.json();
-      setDocuments(updatedDocuments);
-
-      // Actualizăm dialogul de status dacă este deschis
-      if (statusDialog.open && statusDialog.document) {
-        const updatedDocument = updatedDocuments.find(doc => doc._id === statusDialog.document._id);
-        if (updatedDocument) {
-          setStatusDialog({
-            open: true,
-            document: updatedDocument
-          });
-        }
-      }
     } catch (error) {
-      setError(error.message);
+      console.error('Error sending document to sign:', error);
+      enqueueSnackbar(
+        error.message || 'Eroare la trimiterea documentului spre semnare. Verificați dacă aveți drepturile necesare.', 
+        { variant: 'error' }
+      );
     }
   };
 
@@ -424,13 +415,6 @@ const DocumentManagement = () => {
       open: false,
       document: null
     });
-  };
-
-  const handleSendToSignConfirm = () => {
-    if (signDialog.document) {
-      handleSendToSign(signDialog.document._id);
-    }
-    handleSignDialogClose();
   };
 
   const handleViewStatus = (doc) => {
@@ -459,40 +443,6 @@ const DocumentManagement = () => {
     }
   };
 
-  const getStatusChipProps = (document, copy) => {
-    const signatureStatus = signatureStatuses[`${document._id}_${copy.employee}`];
-    console.log('Getting status chip props for', copy.employeeName, ':', signatureStatus);
-    
-    if (copy.status === 'pending') {
-      return {
-        label: 'În așteptare',
-        color: 'warning'
-      };
-    }
-    
-    if (copy.status === 'signed') {
-      if (signatureStatus === undefined) {
-        return {
-          label: 'Verificare...',
-          color: 'default'
-        };
-      }
-      
-      return signatureStatus ? {
-        label: 'Semnat și Valid',
-        color: 'success'
-      } : {
-        label: 'Semnat dar Invalid',
-        color: 'error'
-      };
-    }
-    
-    return {
-      label: 'Netrimis',
-      color: 'default'
-    };
-  };
-
   const handleViewDialogClose = () => {
     setViewDialog({
       open: false,
@@ -511,17 +461,8 @@ const DocumentManagement = () => {
     });
   };
 
-  const handleSelectAllDocuments = (event) => {
-    if (event.target.checked) {
-      setSelectedDocuments(documents.map(doc => doc._id));
-    } else {
-      setSelectedDocuments([]);
-    }
-  };
-
   const handleBulkDelete = async () => {
     try {
-      const token = localStorage.getItem('token');
       const response = await fetch(`${process.env.REACT_APP_API_URL}/api/documents/bulk-delete`, {
         method: 'POST',
         headers: {
@@ -537,33 +478,17 @@ const DocumentManagement = () => {
       }
 
       const result = await response.json();
-      
-      // Reîmprospătăm lista de documente de la server
       await fetchDocuments();
-      
       setSelectedDocuments([]);
       handleDeleteCancel();
       enqueueSnackbar(`${result.deletedCount} documente au fost șterse cu succes`, { 
-        variant: 'success',
-        anchorOrigin: {
-          vertical: 'top',
-          horizontal: 'center'
-        },
-        autoHideDuration: 5000
+        variant: 'success'
       });
     } catch (error) {
       console.error('Error during bulk delete:', error);
-      setError(error.message);
       enqueueSnackbar(error.message || 'Eroare la ștergerea documentelor', { 
-        variant: 'error',
-        anchorOrigin: {
-          vertical: 'top',
-          horizontal: 'center'
-        },
-        autoHideDuration: 5000
+        variant: 'error'
       });
-      
-      // Reîmprospătăm oricum lista pentru a ne asigura că este sincronizată
       await fetchDocuments();
     }
   };
@@ -698,7 +623,7 @@ const DocumentManagement = () => {
         borderRadius: 1,
         bgcolor: isCompleted ? 'success.light' : 'grey.100'
       }}>
-        {config.role === 'admin' && <AdminPanelSettingsIcon sx={{ fontSize: 20 }} />}
+        {config.role === 'org_admin' && <AdminPanelSettingsIcon sx={{ fontSize: 20 }} />}
         {config.role === 'collaborator' && <PersonIcon sx={{ fontSize: 20 }} />}
         {config.role === 'employee' && <GroupIcon sx={{ fontSize: 20 }} />}
         <Box sx={{ flex: 1 }}>
@@ -726,40 +651,46 @@ const DocumentManagement = () => {
 
   // Adăugăm componenta pentru iconița de semnare
   const SignatureActionIcon = ({ document }) => {
-    const hasSignatures = document.signatureConfig && document.signatureConfig.length > 0;
-    const isSigningStarted = document.employeeCopies?.some(copy => copy.status === 'pending_signature');
-    const totalRequiredSignatures = document.signatureConfig?.length || 0;
-    const completedSignaturesCount = document.signatureProgress?.completedSignatures?.length || 0;
-    const isCompleted = totalRequiredSignatures > 0 && completedSignaturesCount === totalRequiredSignatures;
+    const hasSignatures = document.signatureProgress?.hasSignatures || false;
+    const isFullySigned = document.signatureProgress?.isFullySigned || false;
+    const canBeSentForSignature = document.signatureProgress?.canBeSentForSignature || false;
+    const status = document.signatureProgress?.status || 'pending';
+    
+    console.log('SignatureActionIcon state:', {
+      documentId: document._id,
+      hasSignatures,
+      isFullySigned,
+      canBeSentForSignature,
+      status
+    });
     
     const getTooltipText = () => {
-      if (isCompleted) {
+      if (isFullySigned) {
         return 'Toate semnăturile au fost colectate';
       }
-      if (isSigningStarted) {
-        const sequence = document.signatureConfig
-          .sort((a, b) => a.order - b.order)
-          .map(sig => getRoleName(sig.role))
-          .join(' → ');
-        return `Proces de semnare în curs: ${sequence}`;
+      if (hasSignatures) {
+        return 'Proces de semnare în curs';
       }
       return 'Trimite la semnat';
     };
 
-    if (!hasSignatures) return null;
+    // Nu afișăm iconița dacă documentul nu are configurație de semnături
+    if (!document.signatureConfig || document.signatureConfig.length === 0) {
+      return null;
+    }
 
-    const IconComponent = isCompleted ? DoneAllIcon : isSigningStarted ? RotateRightIcon : SendIcon;
+    const IconComponent = isFullySigned ? DoneAllIcon : hasSignatures ? RotateRightIcon : SendIcon;
 
     return (
       <Tooltip title={getTooltipText()}>
         <span>
           <IconButton 
-            onClick={!isSigningStarted && !isCompleted ? () => setSendToSignDialog({ open: true, document }) : undefined}
-            color={isCompleted ? "success" : "primary"}
+            onClick={canBeSentForSignature ? () => handleSignClick(document) : undefined}
+            color={isFullySigned ? "success" : "primary"}
             size="small"
-            disabled={isSigningStarted || isCompleted}
+            disabled={!canBeSentForSignature || hasSignatures || isFullySigned}
             sx={{
-              animation: isSigningStarted ? 'pulse 1.5s ease-in-out infinite' : 'none',
+              animation: hasSignatures && !isFullySigned ? 'pulse 1.5s ease-in-out infinite' : 'none',
               '@keyframes pulse': {
                 '0%': {
                   transform: 'scale(1)',
@@ -776,8 +707,8 @@ const DocumentManagement = () => {
             <IconComponent 
               fontSize="small"
               sx={{
-                color: isCompleted ? 'success.main' : isSigningStarted ? 'primary.main' : 'inherit',
-                animation: isSigningStarted ? 'spin 1.5s linear infinite' : 'none',
+                color: isFullySigned ? 'success.main' : hasSignatures ? 'primary.main' : 'inherit',
+                animation: hasSignatures && !isFullySigned ? 'spin 1.5s linear infinite' : 'none',
                 '@keyframes spin': {
                   '0%': {
                     transform: 'rotate(0deg)',
@@ -791,6 +722,130 @@ const DocumentManagement = () => {
           </IconButton>
         </span>
       </Tooltip>
+    );
+  };
+
+  const AdminSignatureDialog = ({ open, document, onClose, onSign }) => {
+    const handleSign = () => {
+      // Use organization settings instead of dialog options
+      onSign({
+        printDigitalSignature: true,  // These will be overridden by org settings
+        includeQRCode: true
+      });
+    };
+
+    return (
+      <Dialog open={open} onClose={onClose} maxWidth="md" fullWidth>
+        <DialogTitle>Confirmare Trimitere la Semnat</DialogTitle>
+        <DialogContent>
+          <Typography variant="body1" sx={{ mb: 2 }}>
+            Sunteți sigur că doriți să trimiteți acest document la semnat? Această acțiune va iniția procesul de semnare electronică conform configurației organizației.
+          </Typography>
+          <DocumentViewer document={document} />
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={onClose}>Anulează</Button>
+          <Button 
+            onClick={handleSign}
+            variant="contained"
+            color="primary"
+          >
+            Confirmă și Trimite
+          </Button>
+        </DialogActions>
+      </Dialog>
+    );
+  };
+
+  const handleSignClick = async (document) => {
+    // Verificăm dacă primul semnatar este admin și dacă suntem la primul pas
+    const isFirstSignerAdmin = document.signatureConfig?.[0]?.role === 'org_admin';
+    const isFirstStep = !document.signatureProgress?.currentStep || document.signatureProgress.currentStep === 0;
+
+    if (isFirstSignerAdmin && isFirstStep && currentUser.role === 'org_admin') {
+      // Deschidem direct dialogul de semnare pentru admin
+      setAdminSignDialog({
+        open: true,
+        document
+      });
+    } else {
+      // Pentru celelalte cazuri, deschidem dialogul de confirmare
+      setSendToSignDialog({
+        open: true,
+        document
+      });
+    }
+  };
+
+  const handleCloseAdminSignDialog = () => {
+    setAdminSignDialog({
+      open: false,
+      document: null
+    });
+  };
+
+  const handleAdminSign = async (printOptions) => {
+    try {
+      console.log('Sending admin signature request with options:', printOptions);
+      const response = await fetch(
+        `${process.env.REACT_APP_API_URL}/api/documents/${adminSignDialog.document._id}/sign-admin`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`
+          },
+          body: JSON.stringify({ printOptions })
+        }
+      );
+
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.message || 'Eroare la semnarea documentului');
+      }
+
+      const result = await response.json();
+      console.log('Admin signature response:', result);
+      enqueueSnackbar('Document semnat cu succes', { variant: 'success' });
+      
+      // Actualizăm lista de documente și închidem dialogul
+      await fetchDocuments();
+      handleCloseAdminSignDialog();
+    } catch (error) {
+      console.error('Error signing document as admin:', error);
+      enqueueSnackbar(error.message || 'Eroare la semnarea documentului', { 
+        variant: 'error' 
+      });
+    }
+  };
+
+  const SignatureVerificationDialog = ({ open, onClose, result }) => {
+    return (
+      <Dialog open={open} onClose={onClose}>
+        <DialogTitle>
+          Rezultatul Verificării
+        </DialogTitle>
+        <DialogContent>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
+            {result?.isValid ? (
+              <CheckCircleIcon color="success" />
+            ) : (
+              <ErrorIcon color="error" />
+            )}
+            <Typography>
+              {result?.isValid ? 'Semnătură validă' : 'Semnătură invalidă'}
+            </Typography>
+          </Box>
+          {result?.details && (
+            <Typography variant="body2" color="text.secondary">
+              {result.details}
+            </Typography>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={onClose}>Închide</Button>
+        </DialogActions>
+      </Dialog>
     );
   };
 
@@ -985,7 +1040,9 @@ const DocumentManagement = () => {
                               </Typography>
                             </Tooltip>
                           </TableCell>
-                          <TableCell>{(doc.fileSize / 1024 / 1024).toFixed(2)} MB</TableCell>
+                          <TableCell>
+                            {doc.fileSize ? `${(doc.fileSize / 1024 / 1024).toFixed(2)} MB` : 'N/A'}
+                          </TableCell>
                           <TableCell>
                             {doc.uploadedAt ? 
                               new Date(doc.uploadedAt).toLocaleDateString('ro-RO', {
@@ -1135,7 +1192,7 @@ const DocumentManagement = () => {
                       </Typography>
                     )}
                     <Typography variant="body1">
-                      {sig.role === 'admin' && 'Administrator'}
+                      {sig.role === 'org_admin' && 'Administrator'}
                       {sig.role === 'collaborator' && 'Colaborator'}
                       {sig.role === 'employee' && 'Angajați'}
                     </Typography>
@@ -1242,7 +1299,7 @@ const DocumentManagement = () => {
         <DialogActions>
           <Button onClick={handleSignDialogClose}>Anulează</Button>
           <Button
-            onClick={handleSendToSignConfirm}
+            onClick={handleSendToSign}
             variant="contained"
             color="primary"
           >
@@ -1255,13 +1312,20 @@ const DocumentManagement = () => {
         open={sendToSignDialog.open}
         onClose={() => setSendToSignDialog({ open: false, document: null })}
       >
-        <DialogTitle>Confirmare trimitere la semnat</DialogTitle>
+        <DialogTitle>Inițiere proces de semnare</DialogTitle>
         <DialogContent>
           <Typography>
-            Sigur doriți să trimiteți documentul "{sendToSignDialog.document?.title}" spre semnare?
+            Sigur doriți să inițiați procesul de semnare pentru documentul "{sendToSignDialog.document?.title}"?
+          </Typography>
+          <Typography variant="body2" color="text.secondary" sx={{ mt: 2 }}>
+            Ordinea semnăturilor:
+            {sendToSignDialog.document?.signatureConfig
+              .sort((a, b) => a.order - b.order)
+              .map(sig => getRoleName(sig.role))
+              .join(' → ')}
           </Typography>
           <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-            Email-urile vor fi trimise doar către angajații care au acest document asociat.
+            Procesul de semnare va urma strict această ordine, iar fiecare semnatar va fi notificat când îi vine rândul.
           </Typography>
         </DialogContent>
         <DialogActions>
@@ -1274,7 +1338,7 @@ const DocumentManagement = () => {
             color="primary"
             startIcon={<SendIcon />}
           >
-            Trimite
+            Inițiază semnarea
           </Button>
         </DialogActions>
       </Dialog>
@@ -1289,7 +1353,7 @@ const DocumentManagement = () => {
 
       <Dialog 
         open={verifyDialog.open} 
-        onClose={() => setVerifyDialog({ open: false, document: null, employeeCopy: null })}
+        onClose={() => setVerifyDialog({ open: false, document: null })}
         maxWidth="md"
         fullWidth
       >
@@ -1391,7 +1455,7 @@ const DocumentManagement = () => {
         <DialogActions>
           <Button 
             onClick={() => {
-              setVerifyDialog({ open: false, document: null, employeeCopy: null });
+              setVerifyDialog({ open: false, document: null });
               setVerificationResult(null);
             }}
           >
@@ -1542,6 +1606,13 @@ const DocumentManagement = () => {
           <Button onClick={() => setInfoDialog(false)}>Am înțeles</Button>
         </DialogActions>
       </Dialog>
+
+      <AdminSignatureDialog
+        open={adminSignDialog.open}
+        document={adminSignDialog.document}
+        onClose={handleCloseAdminSignDialog}
+        onSign={handleAdminSign}
+      />
     </Container>
   );
 };

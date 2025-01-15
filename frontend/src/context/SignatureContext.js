@@ -9,10 +9,18 @@ export const SignatureProvider = ({ children }) => {
 
   const verifySignature = async (documentId, signatureId) => {
     try {
+      console.log('=== Frontend Signature Verification ===');
       console.log('Verifying signature:', { documentId, signatureId });
+      
+      const token = localStorage.getItem('token');
+      if (!token) {
+        throw new Error('Nu sunteți autentificat');
+      }
+
       const response = await fetch(
         `${process.env.REACT_APP_API_URL}/api/documents/${documentId}/verify/${signatureId}`,
         {
+          method: 'GET',
           headers: {
             'Authorization': `Bearer ${token}`,
             'Content-Type': 'application/json'
@@ -20,18 +28,21 @@ export const SignatureProvider = ({ children }) => {
         }
       );
       
+      console.log('Response status:', response.status);
       const result = await response.json();
       console.log('Verification result:', result);
       
       if (!response.ok) {
-        throw new Error(result.message || result.error || 'Eroare la verificarea semnăturii');
+        throw new Error(result.message || 'Eroare la verificarea semnăturii');
       }
 
       // Actualizăm statusul și rezultatul verificării
       const verificationData = {
         isValid: result.isValid,
-        details: result.details,
-        error: result.error || result.message,
+        signedBy: result.signedBy,
+        signedAt: result.signedAt,
+        documentHash: result.documentHash,
+        errors: result.errors,
         timestamp: new Date().toISOString()
       };
 
@@ -45,10 +56,7 @@ export const SignatureProvider = ({ children }) => {
         [`${documentId}_${signatureId}`]: verificationData
       }));
 
-      return {
-        ...result,
-        ...verificationData
-      };
+      return verificationData;
     } catch (error) {
       console.error('Verification error:', error);
       const errorData = {
