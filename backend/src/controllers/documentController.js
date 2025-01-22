@@ -651,7 +651,8 @@ exports.signDocument = async (req, res) => {
           firstName: employee.firstName,
           lastName: employee.lastName,
           email: employee.email,
-          organization: organization.name
+          organization: organization.name,
+          identityNumber: employee.role === 'org_admin' ? organization.cuiCnp : employee.cnp
         },
         {
           title: document.title,
@@ -930,8 +931,21 @@ exports.verifySignature = async (req, res) => {
       name: signature.signatureInfo?.signedBy?.name || 
            `${signature.signedBy.role === 'org_admin' ? 'Administrator' : 'Angajat'} - ${signature.signedBy.organization}`,
       role: signature.signedBy.role === 'org_admin' ? 'Administrator' : 'Angajat',
-      organization: signature.signedBy.organization
+      organization: signature.signedBy.organization,
+      identityNumber: signature.signedBy.identityNumber || 
+                     signature.signatureInfo?.identityNumber || 
+                     signature.signatureInfo?.signedBy?.identityNumber ||
+                     signature.signatureInfo?.info?.identityNumber
     };
+
+    // Adăugăm logging pentru debug
+    console.log('Debug identityNumber sources:', {
+      fromSignedBy: signature.signedBy.identityNumber,
+      fromSignatureInfo: signature.signatureInfo?.identityNumber,
+      fromSignedByInfo: signature.signatureInfo?.signedBy?.identityNumber,
+      fromInfoDirect: signature.signatureInfo?.info?.identityNumber,
+      final: formattedSignedBy.identityNumber
+    });
 
     // Dacă nu avem rezultate de verificare, folosim informațiile din baza de date
     if (!verificationResults || verificationResults.length === 0) {
@@ -1119,7 +1133,8 @@ async function handleAdminSignature(document, adminId, printOptions) {
     lastName: admin.lastName,
     email: admin.email,
     organization: organization.name,
-    role: 'org_admin'
+    role: 'org_admin',
+    identityNumber: admin.role === 'org_admin' ? organization.cuiCnp : admin.cnp
   }, {
     title: document.title,
     signatureId,

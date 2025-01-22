@@ -192,6 +192,11 @@ const VerifySignature = ({ document, onClose, onSignatureDeleted }) => {
                         Organizație: {sig.signerInfo.organizationName}
                       </Typography>
                     )}
+                    {sig.signerInfo?.identityNumber && (
+                      <Typography variant="body2" color="text.secondary" gutterBottom>
+                        CNP/CUI: {sig.signerInfo.identityNumber}
+                      </Typography>
+                    )}
                     <Typography variant="body2" color="text.secondary">
                       Data semnării: {new Date(sig.timestamp).toLocaleString('ro-RO')}
                     </Typography>

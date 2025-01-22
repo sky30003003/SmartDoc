@@ -255,6 +255,11 @@ const SignatureStatusDialog = ({ open, onClose, document, onVerifyClick, onViewD
                         <Typography variant="body2" gutterBottom>
                           Organizație: {verificationDetails.signedBy.organization}
                         </Typography>
+                        {verificationDetails.signedBy.identityNumber && (
+                          <Typography variant="body2" gutterBottom>
+                            CNP/CUI: {verificationDetails.signedBy.identityNumber}
+                          </Typography>
+                        )}
                         <Typography variant="body2" gutterBottom>
                           Data semnării: {new Date(verificationDetails.signedAt).toLocaleString('ro-RO')}
                         </Typography>

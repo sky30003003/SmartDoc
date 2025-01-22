@@ -92,6 +92,11 @@ const PublicVerification = () => {
             <Typography variant="body2" color="text.secondary">
               {verificationResult?.signerEmail}
             </Typography>
+            {verificationResult?.identityNumber && (
+              <Typography variant="body2" color="text.secondary">
+                CNP/CUI: {verificationResult.identityNumber}
+              </Typography>
+            )}
           </Grid>
 
           <Grid item xs={12} sm={6}>

@@ -209,10 +209,19 @@ class PDFManipulator {
     const organization = signatureInfo.organization || 'Organizație necunoscută';
     const signedAt = signatureInfo.signedAt ? new Date(signatureInfo.signedAt).toLocaleString('en-US') : 'Data necunoscută';
     const signatureId = signatureInfo.signatureId || 'ID necunoscut';
+    const identityNumber = signatureInfo.identityNumber || signatureInfo.signedBy?.identityNumber || 'CNP/CUI necunoscut';
+
+    // Adăugăm logging pentru debug
+    console.log('Debug signature text info:', {
+      identityNumber,
+      rawIdentityNumber: signatureInfo.identityNumber,
+      signedByIdentityNumber: signatureInfo.signedBy?.identityNumber
+    });
 
     const textLines = [
       'Semnat digital de:',
       removeDiacritics(signerName),
+      `CNP/CUI: ${identityNumber}`,
       `Email: ${signerEmail}`,
       `Organizatie: ${removeDiacritics(organization)}`,
       `Data: ${signedAt}`,

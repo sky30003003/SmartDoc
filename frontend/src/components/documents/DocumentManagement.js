@@ -79,8 +79,8 @@ const DocumentManagement = () => {
     file: null,
     requiredSignatures: [
       { role: 'org_admin', order: 1, required: false },
-      { role: 'employee', order: 2, required: false },
-      { role: 'collaborator', order: 3, required: false }
+      { role: 'collaborator', order: 2, required: false },
+      { role: 'employee', order: 3, required: false }
     ]
   });
   const [sendToSignDialog, setSendToSignDialog] = useState({
@@ -189,8 +189,8 @@ const DocumentManagement = () => {
     setUploadError(null);
     setUploadData({ title: '', file: null, requiredSignatures: [
       { role: 'org_admin', order: 1, required: false },
-      { role: 'employee', order: 2, required: false },
-      { role: 'collaborator', order: 3, required: false }
+      { role: 'collaborator', order: 2, required: false },
+      { role: 'employee', order: 3, required: false }
     ] });
   };
 
@@ -1192,7 +1192,7 @@ const DocumentManagement = () => {
                       </Typography>
                     )}
                     <Typography variant="body1">
-                      {sig.role === 'org_admin' && 'Administrator'}
+                      {sig.role === 'org_admin' && 'Admin (utilizator curent)'}
                       {sig.role === 'collaborator' && 'Colaborator'}
                       {sig.role === 'employee' && 'Angajați'}
                     </Typography>
